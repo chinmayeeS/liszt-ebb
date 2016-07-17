@@ -27,13 +27,6 @@ local T = {}
 -- types are defined inline when this file is first executed.
 package.loaded["ebb.src.types"] = T
 
-local DLD = require "ebb.lib.dld"
-
--- SHOULD eliminate Legion from this file if at all possible
-local use_legion = not not rawget(_G, '_legion_env')
-local LW
-if use_legion then LW  = require "ebb.src.legionwrap" end
-
 -- From the Lua Documentation
 function pairs_sorted(tbl, compare)
   local arr = {}
@@ -86,12 +79,6 @@ for i=1,#primitives do
   T[p]            = t
   terraprimitive_to_ebb[t._terra_type] = t
   primitives[i]   = t
-end
-
--- TODO: Remove this; why is this an Ebb type?  Is it user-visible or...?
-T.color_type = T.uint
-if use_legion then
-  assert(uint == LW.legion_color_t)
 end
 
 -------------------------------------------------------------------------------
