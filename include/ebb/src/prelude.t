@@ -36,37 +36,6 @@
 local Pre = {}
 package.loaded["ebb.src.prelude"] = Pre
 
-local use_legion = not not rawget(_G, '_legion_env')
-local use_single = not use_legion
-
-local LE, legion_env, LW
-if use_legion then
-  LE            = rawget(_G, '_legion_env')
-  legion_env    = LE.legion_env[0]
-  LW            = require 'ebb.src.legionwrap'
-end
-
--------------------------------------------------------------------------------
-
-local ProcConstant = {}
-ProcConstant.__index = ProcConstant
-ProcConstant.__tostring = function(proc) return proc.str end
-Pre.CPU = setmetatable({ str = 'CPU' }, ProcConstant)
-Pre.GPU = setmetatable({ str = 'GPU' }, ProcConstant)
-Pre.default_processor = Pre.CPU
--- global signal from the launch script
-if rawget(_G, 'EBB_USE_GPU_SIGNAL') then
-  Pre.default_processor = Pre.GPU
-end
-local function SetDefaultProcessor(proc)
-  Pre.default_processor = proc
-end
-local function GetDefaultProcessor()
-  return Pre.default_processor
-end
-Pre.SetDefaultProcessor = SetDefaultProcessor
-Pre.GetDefaultProcessor = GetDefaultProcessor
-
 -------------------------------------------------------------------------------
 
 local Global      = {}
@@ -87,10 +56,6 @@ Pre.is_macro      = is_macro
 
 -------------------------------------------------------------------------------
 
-local DataArray = use_single and
-                  require('ebb.src.rawdata').DataArray
-
-local C   = require 'ebb.src.c'
 local T   = require 'ebb.src.types'
 
 -------------------------------------------------------------------------------
@@ -108,14 +73,7 @@ function Pre.Global (typ, init)
 
   local s  = setmetatable({_type=typ}, Global)
 
-  if use_single then
-    local tt = typ:terratype()
-    rawset(s, '_data', DataArray.New({size=1,type=tt}))
-    s:set(init)
-
-  elseif use_legion then
-    s:set(init)
-  end
+  -- TODO
 
   return s
 end
@@ -125,52 +83,13 @@ function Global:__newindex(fieldname,value)
 end
 
 function Global:set(val)
-  if not T.luaValConformsToType(val, self._type) then
-    error("value does not conform to type of global: "..
-          tostring(self._type), 2)
-  end
-
-  if use_single then
-    local ptr = self._data:open_write_ptr()
-    ptr[0] = T.luaToEbbVal(val, self._type)
-    self._data:close_write_ptr()
-
-  elseif use_legion then
-    local typ    = self._type
-    local tt     = typ:terratype()
-    local blob   = C.safemalloc( tt )
-    blob[0]      = T.luaToEbbVal(val, typ)
-    local future = LW.legion_future_from_bytes( legion_env.runtime,
-                                                blob,
-                                                terralib.sizeof(tt))
-    if self._data then
-      LW.legion_future_destroy(self._data)
-    end
-    rawset(self, '_data', future)
-  end
-
+  -- TODO
 end
 
 function Global:get()
   local value = nil
-
-  if use_single then
-    local ptr = self._data:open_read_ptr()
-    value = T.ebbToLuaVal(ptr[0], self._type)
-    self._data:close_read_ptr()
-
-  elseif use_legion then
-    local tt = self._type:terratype()
-    local blob   = C.safemalloc( tt )
-    LW.legion_future_get_result_bytes(self._data, blob, terralib.sizeof(tt))
-    value = T.ebbToLuaVal(blob[0], self._type)
-  end
-
+  -- TODO
   return value
-end
-
-function Global:_Raw_DataPtr()
-    return self._data:_raw_ptr()
 end
 
 function Global:Type()

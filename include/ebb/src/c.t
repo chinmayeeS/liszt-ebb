@@ -26,8 +26,6 @@
 
 local ffi = require 'ffi'
 
-local use_gpu = rawget(_G,'EBB_USE_GPU_SIGNAL')
-
 local enum_list = {
   {str='SEEK_SET',ctype='int',ttype=int},
   {str='SEEK_CUR',ctype='int',ttype=int},
@@ -42,27 +40,6 @@ local enum_list = {
   {str="STDERR_FILENO",ctype='int',ttype=int},
   {str="RAND_MAX",ctype='double',ttype=double},
 }
-
-
-
--- If we've got CUDA available
-local cuda_include = ""
-if use_gpu then
-  terralib.includepath = terralib.includepath..";/usr/local/cuda/include"
-  cuda_include = [[
-  #include "cuda_runtime.h"
-  #include "driver_types.h"
-  ]]
-  for _,enum in ipairs({
-    {str='cudaMemcpyHostToHost',ctype='int',ttype=int},
-    {str='cudaMemcpyDeviceToDevice',ctype='int',ttype=int},
-    {str='cudaMemcpyHostToDevice',ctype='int',ttype=int},
-    {str='cudaMemcpyDeviceToHost',ctype='int',ttype=int},
-  }) do
-    table.insert(enum_list,enum)
-  end
-end
-
 
 
 
@@ -92,7 +69,6 @@ double get_wall_time(){
 
 -- Load the blob of C defines
 local c_blob = terralib.includecstring(
-cuda_include ..
 [[
 
 //#include "../deprecated_runtime/src/lmeshloader.h"

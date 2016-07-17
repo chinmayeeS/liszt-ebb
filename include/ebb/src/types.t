@@ -207,135 +207,6 @@ local function internalType(obj)
   return newtyp
 end
 
---we don't bother to de-duplicate query types
---for simplicity and since since queries are not compared to each other
-local function queryType(relation,projections)
-  local t = NewType("query")
-  t.relation = relation
-  t.projections = projections
-  return t
-end
-
--------------------------------------------------------------------------------
-
-local function lua_lin_gen(strides)
-  local code = 'return function(self) return self.a0'
-  for k=2,#strides do
-    code = code..' + '..tostring(strides[k])..' * self.a'..tostring(k-1)
-  end
-  return assert(loadstring(code..' end'))()
-end
-local function terra_lin_gen(keytyp, strides)
-  local key   = symbol(keytyp)
-  local exp   = `key.a0
-  for k=2,#strides do
-    exp = `[exp] + [strides[k]] * key.['a'..tostring(k-1)]
-  end
-  return terra( [key] ) : uint64  return exp  end
-end
-local function legion_terra_lin_gen(keytyp)
-  local key     = symbol(keytyp)
-  local strides = symbol(LW.legion_byte_offset_t[#keytyp.entries])
-  local exp     = `key.a0 * strides[0].offset
-  for k=2,#keytyp.entries do
-    exp = `[exp] + strides[k-1].offset * key.['a'..tostring(k-1)]
-  end
-  return terra( [key], [strides] ) : uint64   return exp  end
-end
-local function legion_domain_point_gen(keytyp)
-  local key  = symbol(keytyp)
-  local dims = #keytyp.entries
-  if dims == 2 then return terra([key]) : LW.legion_domain_point_t
-    return LW.legion_domain_point_t {
-      dim = 2,
-      point_data = arrayof(LW.coord_t,
-        [LW.coord_t](key.a0), [LW.coord_t](key.a1), 0)
-    } end
-  elseif dims == 3 then return terra([key]) : LW.legion_domain_point_t
-    return LW.legion_domain_point_t {
-      dim = 3,
-      point_data = arrayof(LW.coord_t,
-        [LW.coord_t](key.a0), [LW.coord_t](key.a1), [LW.coord_t](key.a2))
-    } end
-  else return macro(function()
-      error('INTERNAL :DomainPoint() undefined for key of dimension '..dims)
-    end)
-  end
-end
-
-local function dim_to_bits(n_dim)
-  if      n_dim < 256         then  return 8
-  elseif  n_dim < 65536       then  return 16
-  elseif  n_dim < 4294967296  then  return 32
-                              else  return 64 end
-end
-
-local function checkrelation(relation)
-  if not T.is_relation(relation) then
-    error("invalid argument to type constructor."..
-          "A relation must be provided", 3)
-  end
-end
-
-local keytype_cache = {}
-local function keyType(relation)
-  if keytype_cache[relation] then return keytype_cache[relation] end
-
-  checkrelation(relation)
-
-  -- collect information
-  local dims        = relation:Dims()
-  local strides     = relation:_INTERNAL_Strides()
-  local dimbits, dimtyps = {}, {}
-  local name        = 'key'
-  if relation:isElastic() then
-    dimbits = {64}
-    dimtyps = {uint64}
-    name    = 'key_64'
-  else
-    for i,d in ipairs(dims) do
-      dimbits[i]  = dim_to_bits(d)
-      dimtyps[i]  = assert(_G['uint'..tostring(dimbits[i])])
-      name        = name .. '_' .. tostring(dimbits[i])
-    end
-  end
-  name              = name..relation:Name()
-
-  -- create the type and the corresponding struct
-  local ktyp        = NewType("key")
-  ktyp.relation     = relation
-  ktyp.ndims        = #dims
-  local tstruct     = terralib.types.newstruct(name)
-  ktyp._terra_type  = tstruct --get_physical_key_type(relation)
-  for i,typ in ipairs(dimtyps) do
-    table.insert(tstruct.entries, { field='a'..tostring(i-1), type=typ })
-  end
-  tstruct:complete()
-
-  -- Install methods
-  tstruct.methods.luaLinearize            = lua_lin_gen(strides)
-  tstruct.methods.terraLinearize          = terra_lin_gen(tstruct, strides)
-  if use_legion then
-    tstruct.methods.legionTerraLinearize  = legion_terra_lin_gen(tstruct)
-    tstruct.methods.domainPoint           = legion_domain_point_gen(tstruct)
-  end
-  -- add equality / inequality tests
-  tstruct.metamethods.__eq = macro(function(lhs,rhs)
-    local exp = `lhs.a0 == rhs.a0
-    for k=2,#dims do
-      local astr = 'a'..tostring(k-1)
-      exp = `exp and lhs.[astr] == rhs.[astr]
-    end
-    return exp
-  end)
-  tstruct.metamethods.__ne = macro(function(lhs,rhs)
-    return `not lhs == rhs
-  end)
-
-
-  keytype_cache[relation] = ktyp
-  return ktyp
-end
 
 -------------------------------------------------------------------------------
 -- In Summary of the Constructors
@@ -343,10 +214,8 @@ end
 -- Complex type constructors
 T.vector        = vectorType
 T.matrix        = matrixType
-T.key           = keyType
 T.record        = recordType
 T.internal      = internalType
-T.query         = queryType
 T.error         = NewType("error")
 
 
@@ -374,9 +243,6 @@ function Type:isinternal()
 end
 function Type:iserror()
   return self.kind == "error"
-end
-function Type:isquery()
-  return self.kind == "query"
 end
 function Type:isrecord()
   return self.kind == "record"
@@ -482,37 +348,6 @@ function Type:__tostring()
   error('toString method not implemented for this type!', 2)
 end
 
--------------------------------------------------------------------------------
---[[ DLD types                                                             ]]--
--------------------------------------------------------------------------------
-
-local DLD_prim_translate = {
-  [int]     = DLD.SINT_32,
-  [uint]    = DLD.UINT_32,
-  [uint64]  = DLD.UINT_64,
-  [bool]    = DLD.UINT_8,
-  [float]   = DLD.FLOAT,
-  [double]  = DLD.DOUBLE,
-}
--- sanity check sizes
-assert(sizeof(int) == 4)
-assert(sizeof(uint) == 4)
-assert(sizeof(uint64) == 8)
-assert(sizeof(bool) == 1)
-function Type:DLDEnum()
-  if self:isprimitive() then
-    local lookup = assert( DLD_prim_translate[self._terra_type] )
-    return lookup
-  elseif self:isscalarkey() then
-    local dims    = self.relation:Dims()
-    local name    = 'KEY'
-    for _,d in ipairs(dims) do name = name..'_'..tostring(dim_to_bits(d)) end
-    return DLD[name]
-  else
-    error('cannot convert more complex type '..tostring(self)..
-          ' to a DLD Enum type', 2)
-  end
-end
 
 -------------------------------------------------------------------------------
 --[[ Type ordering / joining / coercion                                    ]]--
@@ -804,6 +639,7 @@ end
 -------------------------------------------------------------------------------
 --[[ type aliases                                                          ]]--
 -------------------------------------------------------------------------------
+
 for n=2,4 do
   local vecname = 'vec'..tostring(n)
   T[vecname..'i'] = T.vector(T.int, n)

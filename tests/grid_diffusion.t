@@ -22,41 +22,57 @@
 -- DEALINGS IN THE SOFTWARE.
 import 'ebb'
 local L = require 'ebblib'
+local A = require 'ebb.src.api_log'
 
 local N = 1024
+
+-- new relation
 local cells = L.NewRelation { name="cells",  dims={N,N},
                                              periodic={true,true} }
+
+-- set partitions on relations
 cells:SetPartitions{2,2}
 
-cells:NewField('f', L.double):Load(0)
-cells:NewField('f_new', L.double):Load(0)
+-- new fields on relations
+cells:NewField('f', L.double)
+cells:NewField('f_new', L.double)
 
-local ebb init_checker( c : cells )
-  var color = (L.xid(c) + L.yid(c)) % 2
-  if color == 0 then c.f = 2.0
-                else c.f = 1.0 end
-end
+-- load fields
 
-cells:NewFieldMacro('__apply_macro', L.Macro(function(c,x,y)
-  return ebb `L.Affine(cells, {{1,0,x},
-                               {0,1,y}}, c)
-end))
+-- Ccreate subsets on relations
 
-local ebb diffuse( c : cells )
-  var avg = 0.25 * ( c(1,0).f + c(-1,0).f + c(0,1).f + c(0,-1).f )
-  c.f_new = c.f + 0.25 * (avg - c.f)
-end
+--local g_float = L.Global(L.float, 0.5)
+--local g_vec3i = L.Global(L.vec3i, {2, 9, 3})
+--
+--
+---- ebb kernels
+--
+--local ebb init_checker( c : cells )
+--  var color = (L.xid(c) + L.yid(c)) % 2
+--  if color == 0 then c.f = 2.0
+--                else c.f = 1.0 end
+--end
+--
+--cells:NewFieldMacro('__apply_macro', L.Macro(function(c,x,y)
+--  return ebb `L.Affine(cells, {{1,0,x},
+--                               {0,1,y}}, c)
+--end))
+--
+--local ebb diffuse( c : cells )
+--  var avg = 0.25 * ( c(1,0).f + c(-1,0).f + c(0,1).f + c(0,-1).f )
+--  c.f_new = c.f + 0.25 * (avg - c.f)
+--end
+--
+--local ebb check_vals( c : cells )
+--  var color = (L.xid(c) + L.yid(c)) % 2
+--  var goal  = 1.75
+--  if color == 1 then goal = 1.25 end
+--  L.assert(c.f_new == goal)
+--end
+--
+--cells:foreach(init_checker)
+--cells:foreach(diffuse)
+--cells:foreach(check_vals)
 
-local ebb check_vals( c : cells )
-  var color = (L.xid(c) + L.yid(c)) % 2
-  var goal  = 1.75
-  if color == 1 then goal = 1.25 end
-  L.assert(c.f_new == goal)
-end
-
-cells:foreach(init_checker)
-cells:foreach(diffuse)
-cells:foreach(check_vals)
-
-
-
+-- print all API calls
+A.log:print()

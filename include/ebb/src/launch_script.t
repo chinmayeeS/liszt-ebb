@@ -34,8 +34,6 @@
 
 local return_code = 0
 
-local use_gpu = rawget(_G,'EBB_USE_GPU_SIGNAL')
-
 local function top_level_err_handler ( errobj )
   local err = tostring(errobj)
   if not string.match(err, 'stack traceback:') then
@@ -49,14 +47,4 @@ script_filename = arg[0]
 
 exit_code = xpcall( function ()
   assert(terralib.loadfile(script_filename))()
-
-  if use_gpu then
-    -- make sure all CUDA computations have finished
-    -- before we exit
-    local errcode = require('ebb.src.gpu_util').device_sync()
-    if errcode ~= 0 then
-      error('saw CUDA error code when exiting: '..errcode)
-    end
-  end
-
 end, top_level_err_handler)

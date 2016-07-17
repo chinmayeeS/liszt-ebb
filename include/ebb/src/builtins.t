@@ -23,12 +23,9 @@
 local B = {}
 package.loaded["ebb.src.builtins"] = B
 
-local use_gpu = rawget(_G,'EBB_USE_GPU_SIGNAL')
-
 local Pre = require "ebb.src.prelude"
 local T   = require "ebb.src.types"
 local C   = require "ebb.src.c"
-local G   = require "ebb.src.gpu_util"
 local AST = require "ebb.src.ast"
 local R   = require "ebb.src.relations"
 
@@ -45,7 +42,6 @@ local vectorT   = T.vector
 --local matrixT   = T.matrix
 
 local CPU       = Pre.CPU
-local GPU       = Pre.GPU
 
 
 ---------------------------------------------
@@ -391,26 +387,11 @@ local terra ebbAssert(test : bool, file : rawstring, line : int)
     end
 end
 
--- NADA FOR NOW
-local gpuAssert = terra(test : bool, file : rawstring, line : int) end
-
-if use_gpu then
-    gpuAssert = terra(test : bool, file : rawstring, line : int)
-        if not test then
-            G.printf("%s:%d: assertion failed!\n", file, line)
-            cudalib.nvvm_membar_gl()
-            terralib.asm(terralib.types.unit,"trap;","",true)
-            --@([&uint8](0)) = 0 -- Should replace with a CUDA trap..../li
-        end
-    end
-end
-
 function B.assert.codegen(ast, ctxt)
     local test = ast.params[1]
     local code = test:codegen(ctxt)
     
     local tassert = ebbAssert
-    if ctxt:onGPU() then tassert = gpuAssert end
 
     if test.node_type:isvector() then
         local N      = test.node_type.N
@@ -538,9 +519,6 @@ function B.print.codegen(ast, ctxt)
     printSpec = printSpec .. "\n"
 
     local printf = C.printf
-    if (ctxt:onGPU()) then
-        printf = G.printf
-    end
 	return quote [definitions] in printf(printSpec, elemQuotes) end
 end
 
@@ -560,19 +538,13 @@ local cpu_randinitialized = false
 function B.rand.codegen(ast, ctxt)
     local rand
     local RAND_MAX
-    if ctxt:onGPU() then
-        -- GPU_util makes sure we're seeded for us
-        rand = `G.rand([ctxt:gid()])
-        RAND_MAX = G.RAND_MAX
-    else
-        -- make sure we're seeded
-        if not cpu_randinitialized then
-            cpu_randinitialized = true
-            C.srand(0) --cmath.time(nil)
-        end
-        rand = `C.rand()
-        RAND_MAX = C.RAND_MAX
+    -- make sure we're seeded
+    if not cpu_randinitialized then
+        cpu_randinitialized = true
+        C.srand(0) --cmath.time(nil)
     end
+    rand = `C.rand()
+    RAND_MAX = C.RAND_MAX
 
     -- reciprocal
     --local reciprocal = terralib.constant(double, 1/(1.0e32-1.0))
@@ -722,7 +694,6 @@ function B.length.codegen(ast, ctxt)
     end
 
     local sqrt = C.sqrt
-    if ctxt:onGPU() then sqrt = G.sqrt end
 
     return quote
         var [vec] = [exp]
@@ -733,7 +704,6 @@ end
 
 function Builtin.newDoubleFunction(name)
     local cpu_fn = C[name]
-    local gpu_fn = G[name]
     local lua_fn = function (arg) return cpu_fn(arg) end
 
     local b = Builtin.new(lua_fn)
@@ -758,11 +728,7 @@ function Builtin.newDoubleFunction(name)
 
     function b.codegen (ast, ctxt)
         local exp = ast.params[1]:codegen(ctxt)
-        if ctxt:onGPU() then
-            return `gpu_fn([exp])
-        else
-            return `cpu_fn([exp])
-        end
+          return `cpu_fn([exp])
     end
     return b
 end
@@ -804,13 +770,11 @@ function B.fmin.check(ast, ctxt) return minmax_check(ast, ctxt, 'fmin') end
 function B.fmax.check(ast, ctxt) return minmax_check(ast, ctxt, 'fmax') end
 function B.fmin.codegen(ast, ctxt)
     local lhs, rhs = ast.params[1]:codegen(ctxt), ast.params[2]:codegen(ctxt)
-    if ctxt:onGPU() then return `G.fmin(lhs, rhs)
-                    else return `C.fmin(lhs, rhs) end
+    return `C.fmin(lhs, rhs)
 end
 function B.fmax.codegen(ast, ctxt)
     local lhs, rhs = ast.params[1]:codegen(ctxt), ast.params[2]:codegen(ctxt)
-    if ctxt:onGPU() then return `G.fmax(lhs, rhs)
-                    else return `C.fmax(lhs, rhs) end
+    return `C.fmax(lhs, rhs)
 end
 
 
@@ -865,11 +829,7 @@ end
 function B.pow.codegen(ast, ctxt)
     local exp1 = ast.params[1]:codegen(ctxt)
     local exp2 = ast.params[2]:codegen(ctxt)
-    if ctxt:onGPU() then
-        return `G.pow([exp1], [exp2])
-    else
-        return `C.pow([exp1], [exp2])
-    end
+    return `C.pow([exp1], [exp2])
 end
 
 B.fmod = Builtin.new(C.fmod)
@@ -897,11 +857,7 @@ end
 function B.fmod.codegen(ast, ctxt)
     local exp1 = ast.params[1]:codegen(ctxt)
     local exp2 = ast.params[2]:codegen(ctxt)
-    if ctxt:onGPU() then
-        return `G.fmod([exp1], [exp2])
-    else
-        return `C.fmod([exp1], [exp2])
-    end
+    return `C.fmod([exp1], [exp2])
 end
 
 
