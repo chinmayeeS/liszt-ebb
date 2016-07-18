@@ -237,6 +237,86 @@ function Relation:NewFieldMacro (name, macro)
   return macro
 end
 
+local FieldDispatcher     = {}
+FieldDispatcher.__index   = FieldDispatcher
+R.FieldDispatcher         = FieldDispatcher
+local function NewFieldDispatcher()
+  return setmetatable({
+    _reader   = nil,
+    _writer   = nil,
+    _reducers = {},
+  }, FieldDispatcher)
+end
+local function isfielddispatcher(obj)
+  return getmetatable(obj) == FieldDispatcher
+end
+R.isfielddispatcher = isfielddispatcher
+
+local function getFieldDispatcher(rel, fname, ufunc)
+  if not fname or type(fname) ~= "string" then
+    error("NewField*Function() expects a string as the first argument", 3)
+  end
+  if not is_valid_lua_identifier(fname) then
+    error(valid_name_err_msg.field, 3)
+  end
+  if not is_function(ufunc) then
+    error("NewField*Function() expects an Ebb Function "..
+          "as the last argument", 3)
+  end
+
+  local lookup = rel[fname]
+  if lookup and isfielddispatcher(lookup) then return lookup
+  elseif lookup then
+    error("Cannot create a new field-function with name '"..fname.."'  "..
+          "That name is already being used.", 3)
+  end
+
+  rawset(rel, fname, NewFieldDispatcher())
+  return rel[fname]
+end
+
+function Relation:NewFieldReadFunction(fname, userfunc)
+  local dispatch = getFieldDispatcher(self, fname, userfunc)
+  if dispatch._reader then
+    error("NewFieldReadFunction() error: function already assigned.", 2)
+  end
+  dispatch._reader = userfunc
+  self._functions:insert(userfunc)
+  return userfunc
+end
+
+function Relation:NewFieldWriteFunction(fname, userfunc)
+  local dispatch = getFieldDispatcher(self, fname, userfunc)
+  if dispatch._writer then
+    error("NewFieldWriteFunction() error: function already assigned.", 2)
+  end
+  dispatch._writer = userfunc
+  self._functions:insert(userfunc)
+  return userfunc
+end
+
+local redops = {
+  ['+'] = true,
+  ['-'] = true,
+  ['*'] = true,
+  ['max'] = true,
+  ['min'] = true,
+}
+function Relation:NewFieldReduceFunction(fname, op, userfunc)
+  local dispatch = getFieldDispatcher(self, fname, userfunc)
+  if not redops[op] then
+    error("NewFieldReduceFunction() expects a reduction operator as the "..
+          "second argument.", 2)
+  end
+  if dispatch._reducers[op] then
+    error("NewFieldReduceFunction() error: '"..op.."' "..
+          "function already assigned.", 2)
+  end
+  dispatch._reducers[op] = userfunc
+  self._functions:insert(userfunc)
+  return userfunc
+end
+
 
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
@@ -287,32 +367,7 @@ local function is_subrectangle(rel, obj)
 end
 
 function Relation:_INTERNAL_NewSubsetFromRectangles(name, rectangles)
-  if #self:Dims() == 2 then
-    return self:_INTERNAL_NewSubsetFromLuaFunction(name, function(xi, yi)
-      for _,r in ipairs(rectangles) do
-        local xlo, xhi, ylo, yhi = r[1][1], r[1][2], r[2][1], r[2][2]
-        if xlo <= xi and xi <= xhi and ylo <= yi and yi <= yhi then
-          return true -- found cell inside some rectangle
-        end
-      end
-      return false -- couldn't find cell inside any rectangle
-    end)
-  else
-    assert(#self:Dims() == 3, "grids must be 2 or 3 dimensional")
-    return self:_INTERNAL_NewSubsetFromLuaFunction(name, function(xi, yi, zi)
-      for _,r in ipairs(rectangles) do
-        local xlo, xhi, ylo, yhi, zlo, zhi =
-          r[1][1], r[1][2],  r[2][1], r[2][2], r[3][1], r[3][2]
-        if xlo <= xi and xi <= xhi and
-           ylo <= yi and yi <= yhi and
-           zlo <= zi and zi <= zhi
-        then
-          return true -- found cell inside some rectangle
-        end
-      end
-      return false -- couldn't find cell inside any rectangle
-    end)
-  end
+  AL.RecordAPICall('NewRectangleSubset', {self, name, rectangles}, nil)
 end
 
 function Relation:NewSubset( name, arg )
@@ -324,12 +379,32 @@ function Relation:NewSubset( name, arg )
     error("Cannot create a new subset with name '"..name.."'  "..
           "That name is already being used.", 2)
   end
-  if not is_subrectangle(self, arg) then
-    error('NewSubset(): Was expecting a rectangle specified as a '..
-          'list of '..(#self:Dims())..' range pairs lying inside '..
-          'the grid', 2)
+  if type(arg) == 'table' then
+    if self:isGrid() then
+      if arg.rectangles then
+        if not terralib.israwlist(arg.rectangles) then
+          error("NewSubset(): Was expecting 'rectangles' to be a list", 2)
+        end
+        for i,r in ipairs(arg.rectangles) do
+          if not is_subrectangle(self, r) then
+            error("NewSubset(): Entry #"..i.." in 'rectangles' list was "..
+                  "not a rectangle, specified as a list of "..(#self:Dims())..
+                  " range pairs lying inside the grid", 2)
+          end
+        end
+        return self:_INTERNAL_NewSubsetFromRectangles(name, arg.rectangles)
+      else -- assume a single rectangle
+        if not is_subrectangle(self, arg) then
+          error('NewSubset(): Was expecting a rectangle specified as a '..
+                'list of '..(#self:Dims())..' range pairs lying inside '..
+                'the grid', 2)
+        end
+        return self:_INTERNAL_NewSubsetFromRectangles(name, { arg })
+      end
+    end
+  else
+    error("Unexpected argument to subsets.", 2)
   end
-  return self:_INTERNAL_NewSubsetFromRectangles(name, { arg })
 end
 
 
@@ -399,7 +474,7 @@ function Relation:NewField (name, typ)
     typ:basetype().relation._incoming_refs[field] = 'key_field'
   end
 
-  AL.RecordAPICall('NewField', {name, typ}, field)
+  AL.RecordAPICall('NewField', {self, name, typ}, field)
 
   return field
 end
@@ -424,11 +499,14 @@ end
 -------------------------------------------------------------------------------
 --[[  High-Level Loading and Dumping Operations (Lua and Terra)            ]]--
 
-function Field:Load(arg, ...)
-  assert ( self._type:isprimitive() or
-          (self._type:isvector() and #arg == self._type.N) or
-          (self._type:ismatrix() and #arg == self._type.Nrow))
-  -- TODO
+function Field:Load(arg)
+  if not type(arg) == 'table' and
+         (self._type:isprimitive() or
+         (self._type:isvector() and #arg == self._type.N) or
+         (self._type:ismatrix() and #arg == self._type.Nrow)) then
+    error('Can only load constants into fields')
+  end
+  AL.RecordAPICall('LoadField', { self, arg }, nil)
 end
 
 
@@ -439,5 +517,5 @@ end
 -------------------------------------------------------------------------------
 
 function Relation:SetPartitions(num_partitions)
-  -- TODO
+  AL.RecordAPICall('SetPartitions', {self, num_partitions}, nil)
 end

@@ -22,24 +22,32 @@
 -- DEALINGS IN THE SOFTWARE.
 import 'ebb'
 local L = require 'ebblib'
-local A = require 'ebb.src.api_log'
+local Grid  = require 'ebb.domains.grid' 
 
 local N = 1024
 
 -- new relation
 local cells = L.NewRelation { name="cells",  dims={N,N},
                                              periodic={true,true} }
+local grid = Grid.NewGrid2d{
+              size           = {16,8},
+              origin         = {0,0},
+              width          = {1.0,1.0},
+              boundary_depth = {2, 0},
+              periodic_boundary = {true, false},
+              partitions        = {2, 1}
+            }
 
--- set partitions on relations
-cells:SetPartitions{2,2}
+local cells = grid.cells
 
 -- new fields on relations
 cells:NewField('f', L.double)
 cells:NewField('f_new', L.double)
+cells:NewField('v', L.vec3d):Load({0.1, 0.7, 1.5})
 
 -- load fields
-
--- Ccreate subsets on relations
+cells.f:Load(0)
+cells.f_new:Load(0.5)
 
 --local g_float = L.Global(L.float, 0.5)
 --local g_vec3i = L.Global(L.vec3i, {2, 9, 3})
@@ -75,4 +83,5 @@ cells:NewField('f_new', L.double)
 --cells:foreach(check_vals)
 
 -- print all API calls
+local A = require 'ebb.src.api_log'
 A.log:print()

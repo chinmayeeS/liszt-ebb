@@ -25,34 +25,6 @@
 local A = {}
 package.loaded["ebb.src.api_log"] = A
 
--- stringify lua values
-local function escape_str(s)
-  return string.gsub(s, "\"", "\\\"")
-end
-local function key_stringify(k)
-  local typ = type(k)
-  if      typ == 'number'   then  return tostring(k)
-  elseif  typ == 'boolean'  then  return tostring(k)
-  elseif  typ == 'string'   then  return string.format('"%s"',escape_str(k))
-  else  error('cannot use obj type '..typ..' as table key') end
-end
-local function lson_stringify(obj)
-  local typ = type(obj)
-  if      typ == 'number'   then  return tostring(obj)
-  elseif  typ == 'nil'      then  return tostring(nil)
-  elseif  typ == 'boolean'  then  return tostring(obj)
-  elseif  typ == 'string'   then  return string.format('"%s"',escape_str(obj))
-  elseif  typ == 'table'    then
-    local entries = terralib.newlist()
-    if terralib.israwlist(obj) then
-      for i=1,#obj do entries[i] = lson_stringify(obj[i]) end
-    else for k,v in pairs(obj) do entries:insert(
-      string.format( '[%s]=%s', key_stringify(k), lson_stringify(v) )
-    ) end end
-    return string.format( '{%s}',entries:concat(',') )
-  else error('unhandled stringification of type: '..typ) end
-end
-
 -- API log entry
 local APIEntry = {}
 APIEntry.__index = APIEntry
@@ -65,10 +37,34 @@ local function NewAPIEntry(call_name, args, return_val)
   return entry
 end
 
+-- stringify lua values
+local function escape_str(s)
+  return string.gsub(s, "\"", "\\\"")
+end
+local function elem_stringify(k)
+  local typ = type(k)
+  if      typ == 'number'   then  return tostring(k)
+  elseif  typ == 'boolean'  then  return tostring(k)
+  elseif  typ == 'string'   then  return string.format('"%s"',escape_str(k))
+  else return tostring(k) end
+end
+function APIEntry:args_stringify()
+  local obj = self.args
+  local entries = terralib.newlist()
+  if terralib.israwlist(obj) then
+    for i=1,#obj do entries[i] = elem_stringify(obj[i]) end
+  else
+    for k,v in pairs(obj) do entries:insert(
+      string.format( '[%s]=%s', elem_stringify(k), elem_stringify(v) ))
+    end
+  end
+  return string.format( '{%s}', entries:concat(', ') )
+end
+
 function APIEntry:indented_string(indent)
   local str  = indent .. " name : " .. self.name .. "\n"
   str = str .. indent .. " return val : " .. tostring(self.return_val) .. "\n"
-  str = str .. indent .. " args : " .. lson_stringify(self.args)
+  str = str .. indent .. " args : " .. self:args_stringify()
   return str
 end
 
@@ -89,6 +85,7 @@ function APILog:print()
 end
 
 function A.RecordAPICall(call_name, args, return_val)
+  assert(type(args) == 'table')
   local entry = NewAPIEntry(call_name, args, return_val)
   APILog:insert(entry)
 end
