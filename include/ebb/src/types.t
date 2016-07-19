@@ -194,6 +194,26 @@ local function internalType(obj)
   return newtyp
 end
 
+-------------------------------------------------------------------------------
+
+local function checkrelation(relation)
+  if not T.is_relation(relation) then
+    error("invalid argument to type constructor."..
+          "A relation must be provided", 3)
+  end
+end
+
+local keytype_cache = {}
+local function keyType(relation)
+  if keytype_cache[relation] then return keytype_cache[relation] end
+  checkrelation(relation)
+  -- create the type and the corresponding struct
+  local ktyp        = NewType("key")
+  ktyp.relation     = relation
+  ktyp.ndims        = #relation:Dims()
+  return ktyp
+end
+
 
 -------------------------------------------------------------------------------
 -- In Summary of the Constructors
@@ -201,6 +221,7 @@ end
 -- Complex type constructors
 T.vector        = vectorType
 T.matrix        = matrixType
+T.key           = keyType
 T.record        = recordType
 T.internal      = internalType
 T.error         = NewType("error")

@@ -35,13 +35,12 @@ local errorT        = T.error
 local keyT          = T.key
 local internalT     = T.internal
 local boolT         = T.bool
+local keyT          = T.key
 
 local is_type       = T.istype
 local is_global     = Pre.is_global
 local is_constant   = Pre.is_constant
 local is_macro      = Pre.is_macro
---local is_function   = F.is_function
---local is_builtin    = B.is_builtin
 
 
 ------------------------------------------------------------------------------
@@ -74,12 +73,11 @@ function Context:error(ast, ...)
 end
 
 
-
-
-
 ------------------------------------------------------------------------------
 --[[ specialization:                                                      ]]--
 ------------------------------------------------------------------------------
+
+
 function S.specialize(luaenv, some_ast)
   local env  = terralib.newenvironment(luaenv)
   local diag = terralib.newdiagnostics()
@@ -92,8 +90,6 @@ function S.specialize(luaenv, some_ast)
 
   return new_ast
 end
-
-
 
 
 local function exec_external(exp, ctxt, ast_node, default)
@@ -121,17 +117,10 @@ local function exec_type_annotation(typexp, ast_node, ctxt)
 end
 
 
-
-
-
 ------------------------------------------------------------------------------
 --[[ AST Structural Junk:                                                 ]]--
 ------------------------------------------------------------------------------
---function ast.AST:specialize(ctxt)
---  return self:passthrough('specialize', ctxt)
---
---  --error("Specialization not implemented for AST node " .. self.kind)
---end
+
 
 ast.NewCopyPass('specialize')
 
@@ -226,8 +215,6 @@ function ast.LetExpr:specialize(ctxt)
 end
 
 
-
-
 ------------------------------------------------------------------------------
 --[[ Unary operations applied to simple literals should be collapsed:     ]]--
 ------------------------------------------------------------------------------
@@ -263,6 +250,7 @@ end
 --[[ AST Name Related:                                                    ]]--
 ------------------------------------------------------------------------------
 -- We must re-write names with symbols in this pass...
+
 
 function ast.DeclStatement:specialize(ctxt)
   local decl = self:clone()
@@ -322,11 +310,10 @@ function ast.GenericFor:specialize(ctxt)
 end
 
 
-
-
 ------------------------------------------------------------------------------
 --[[ AST NAME:                                                            ]]--
 ------------------------------------------------------------------------------
+
 
 local function NewLuaObject(anchor, obj)
   local lo     = ast.LuaObject:DeriveFrom(anchor)
@@ -498,7 +485,6 @@ function ast.TableLookup:specialize(ctxt)
 end
 
 
-
 ------------------------------------------------------------------------------
 --[[ AST USER FUNCTIONS:                                                  ]]--
 ------------------------------------------------------------------------------
@@ -530,13 +516,3 @@ function ast.UserFunction:specialize(ctxt)
   func.params, func.ptypes, func.body, func.exp = params, ptypes, body, exp
   return func
 end
-
-
-
-
-
-
-
-
-
-

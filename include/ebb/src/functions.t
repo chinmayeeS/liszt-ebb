@@ -32,6 +32,8 @@ local R                 = require 'ebb.src.relations'
 local specialization    = require 'ebb.src.specialization'
 local semant            = require 'ebb.src.semant'
 local phase             = require 'ebb.src.phase'
+local stencil           = require 'ebb.src.stencil'
+local AL                = require "ebb.src.api_log"
 
 local function shallowcopy_table(tbl)
   local x = {}
@@ -47,12 +49,6 @@ F.Function        = Function
 local function is_function(obj) return getmetatable(obj) == Function end
 F.is_function     = is_function
 
-local UFVersion   = {}
-UFVersion.__index = UFVersion
-F.UFVersion       = UFVersion
-local function is_version(obj) return getmetatable(obj) == UFVersion end
-F.is_version      = is_version
-
 
 -------------------------------------------------------------------------------
 --[[ UserFunc:                                                             ]]--
@@ -67,6 +63,8 @@ function F.NewFunction(func_ast, luaenv)
     _versions     = {}, -- the versions table is nested
     _name         = special.id,
   }, Function)
+
+  AL.RecordAPICall('NewFunction', {}, ufunc)
 
   return ufunc
 end
@@ -89,7 +87,7 @@ Takes in params {
 }
 Returns {
   field_use,
-  field_accesses,  -- TODO: combine field_use and field_accesses
+  field_accesses,
   global_use,
   global_reductions,
 }
@@ -169,10 +167,6 @@ Util.memoize_from(2, function(calldepth, ufunc, relset, ...)
     field_accesses  = f_g_uses.field_accesses,
     global_use      = f_g_uses.global_use,
     versions        = terralib.newlist(),
-
-    -- hacks for planner right now
-    relation        = function() return relation end,
-    all_accesses    = function() return f_g_uses.field_accesses end,
   }
 end)
 
@@ -180,26 +174,6 @@ function Function:_get_typechecked(calldepth, relset, strargs)
   return get_ufunc_typetable(calldepth+1, self, relset, unpack(strargs))
 end
 
-local function get_ufunc_version(ufunc, typeversion_table, relset, params)
-  params          = params or {}
-  local proc      = params.location or Pre.default_processor
-  local relation  = R.is_subset(relset) and relset:Relation() or relset
-
-  return {
-    ufunc           = ufunc,
-    typtable        = typeversion_table,
-    relation        = relation,
-    subset          = R.is_subset(relset) and relset or nil,
-    proc            = proc,
-  }
-end
-
-local function get_func_call_params_from_args(...)
-  local N = select('#',...)
-  local last_arg = N > 0 and select(N,...) or nil
-  if type(last_arg) == 'table' then return last_arg
-                               else return {} end
-end
 function Function:_Get_Type_Version_Table(calldepth, relset, ...)
   self._typed_at_least_once = true
   if not (R.is_subset(relset) or R.is_relation(relset)) then
@@ -243,39 +217,33 @@ function Function:_Get_Type_Version_Table(calldepth, relset, ...)
   return typeversion
 end
 
-function Function:doForEach(relset, ...)
-  self:_doForEach(relset, ...)
+local function get_ufunc_version(ufunc, typeversion_table, relset, params)
+  params          = params or {}
+  local proc      = params.location or Pre.default_processor
+  local relation  = R.is_subset(relset) and relset:Relation() or relset
+
+  return {
+    ufunc           = ufunc,
+    typtable        = typeversion_table,
+    relation        = relation,
+    subset          = R.is_subset(relset) and relset or nil,
+    proc            = proc,
+  }
+end
+
+local function get_func_call_params_from_args(...)
+  local N = select('#',...)
+  local last_arg = N > 0 and select(N,...) or nil
+  if type(last_arg) == 'table' then return last_arg
+                               else return {} end
 end
 function Function:_doForEach(relset, ...)
   local params      = get_func_call_params_from_args(...)
   local typeversion = self:_Get_Type_Version_Table(4, relset, ...)
   -- now we either retrieve or construct the appropriate function version
   local version = get_ufunc_version(self, typeversion, relset, params)
-  version:Execute { }
+  AL.RecordAPICall('ForEachCall', {}, version)
 end
-
-
-function Function:getCompileTime()
-  local versions  = self:GetAllVersions()
-  local sumtime   = Stats.NewTimer('')
-  for _,vs in ipairs(versions) do
-    sumtime = sumtime + vs._compile_timer
-  end
-  sumtime:setName(self._name..'_compile_time')
-  return sumtime
-end
-
-function Function:getExecutionTime()
-  local versions  = self:GetAllVersions()
-  local sumtime   = Stats.NewTimer('')
-  for _,vs in ipairs(versions) do
-    sumtime = sumtime + vs._exec_timer
-  end
-  sumtime:setName(self._name..'_execution_time')
-  return sumtime
-end
-
-function Function:_TESTING_GetFieldAccesses(relset, ...)
-  local typeversion = self:_Get_Type_Version_Table(4, relset, ...)
-  return typeversion.field_accesses -- these have the stencils in them
+function Function:doForEach(relset, ...)
+  self:_doForEach(relset, ...)
 end
