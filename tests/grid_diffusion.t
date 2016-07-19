@@ -47,10 +47,10 @@ cells:NewField('v', L.vec3d):Load({0.1, 0.7, 1.5})
 cells.f:Load(0)
 cells.f_new:Load(0.5)
 
---local g_float = L.Global(L.float, 0.5)
---local g_vec3i = L.Global(L.vec3i, {2, 9, 3})
---
---
+local g_float = L.Global(L.float, 0)
+local g_vec3d = L.Global(L.vec3i, {0.1, 0.3, 0.9})
+
+
 -- ebb kernels
 
 local ebb init_checker( c : cells )
@@ -62,6 +62,7 @@ end
 local ebb diffuse( c : cells )
   var avg = 0.25 * ( c(1,0).f + c(-1,0).f + c(0,1).f + c(0,-1).f )
   c.f_new = c.f + 0.25 * (avg - c.f)
+  g_float += 1
 end
 
 local ebb check_vals( c : cells )
@@ -72,8 +73,12 @@ local ebb check_vals( c : cells )
 end
 
 cells:foreach(init_checker)
-cells:foreach(diffuse)
-cells:foreach(check_vals)
+
+for i = 1,3 do
+  cells:foreach(diffuse)
+  g_float:set(0)
+  cells:foreach(check_vals)
+end
 
 -- print all API calls
 local A = require 'ebb.src.api_log'

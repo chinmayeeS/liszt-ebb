@@ -57,13 +57,10 @@ function Builtin.new(luafunc)
     local check = function(ast, ctxt)
         error('unimplemented builtin function typechecking')
     end
-    local codegen = function(ast, ctxt)
-        error('unimplemented builtin function codegen')
-    end
     if not luafunc then
         luafunc = function() error("Cannot call from Lua code") end
     end
-    return setmetatable({check=check, codegen=codegen, luafunc = luafunc},
+    return setmetatable({check=check, luafunc = luafunc},
                         Builtin)
 end
 function B.is_builtin(f)
@@ -115,9 +112,6 @@ function B.id.check(ast, ctxt)
 
     return uint64T
 end
-function B.id.codegen(ast, ctxt)
-    return `[uint64]([ast.params[1]:codegen(ctxt)].a0)
-end
 
 B.xid = Builtin.new()
 function B.xid.check(ast, ctxt)
@@ -132,9 +126,6 @@ function B.xid.check(ast, ctxt)
 
     return uint64T
 end
-function B.xid.codegen(ast, ctxt)
-    return `[uint64]( [ast.params[1]:codegen(ctxt)].a0 )
-end
 
 B.yid = Builtin.new()
 function B.yid.check(ast, ctxt)
@@ -148,9 +139,6 @@ function B.yid.check(ast, ctxt)
     end
 
     return uint64T
-end
-function B.yid.codegen(ast, ctxt)
-    return `[uint64]( [ast.params[1]:codegen(ctxt)].a1 )
 end
 
 B.zid = Builtin.new()
@@ -170,9 +158,6 @@ function B.zid.check(ast, ctxt)
     end
 
     return uint64T
-end
-function B.zid.codegen(ast, ctxt)
-    return `[uint64]( [ast.params[1]:codegen(ctxt)].a2 )
 end
 
 
@@ -263,48 +248,6 @@ end
 local terra full_mod(val : int64, modulus : int64) : uint64
     return ((val % modulus) + modulus) % modulus
 end
-function B.Affine.codegen(ast, ctxt)
-    local args      = ast.params
-    local dst_rel   = args[1].node_type.value
-    local src_rel   = args[3].node_type.relation
-    local dst_dims  = dst_rel:Dims()
-    local src_dims  = src_rel:Dims()
-    local dst_wrap  = dst_rel:Periodic()
-    local nrow      = args[2].node_type.Nrow
-    local ncol      = args[2].node_type.Ncol
-
-    local srckey    = symbol(args[3].node_type:terratype())
-    local mat       = symbol(args[2].node_type:terratype())
-    local dsttype   = keyT(dst_rel):terratype()
-    local results   = {}
-
-    -- matrix multiply build
-    for yi = 0,nrow-1 do
-        -- read out the constant offset
-        local sum = `mat.d[yi][ncol-1]
-        for xi = 0,ncol-2 do
-            local astr = 'a'..tostring(xi)
-            sum = `[sum] + mat.d[yi][xi] * srckey.[astr]
-        end
-        -- make sure to clamp back down into address values
-        sum = `[uint64](sum)
-        -- add periodicity wrapping if specified
-        if dst_wrap[yi+1] then
-            results[yi+1] = `full_mod(sum, [ dst_dims[yi+1] ])
-        else
-            results[yi+1] = sum
-        end
-    end
-
-    -- capture the arguments safely
-    local wrapped = quote
-        var [srckey] = [ args[3]:codegen(ctxt) ]
-        var [mat]    = [ args[2]:codegen(ctxt) ]
-    in
-        [dsttype]({ results })
-    end
-    return wrapped
-end
 
 B.UNSAFE_ROW = Builtin.new()
 function B.UNSAFE_ROW.check(ast, ctxt)
@@ -343,25 +286,6 @@ function B.UNSAFE_ROW.check(ast, ctxt)
     end
     return ret_type
 end
-function B.UNSAFE_ROW.codegen(ast, ctxt)
-    local rel = ast.params[2].node_type.value
-    local ndim = #rel:Dims()
-    local addrtype = keyT(rel):terratype()
-    if ndim == 1 then
-        return `[addrtype]({ [ast.params[1]:codegen(ctxt)] })
-    else
-        local vecui = ast.params[1]:codegen(ctxt)
-        if ndim == 2 then
-            return quote var v = vecui in
-                [addrtype]({ v.d[0], v.d[1] })
-            end
-        else
-            return quote var v = vecui in
-                [addrtype]({ v.d[0], v.d[1], v.d[2] })
-            end
-        end
-    end
-end
 
 
 B.assert = Builtin.new(assert)
@@ -384,31 +308,6 @@ local terra ebbAssert(test : bool, file : rawstring, line : int)
     if not test then
         C.fprintf(C.stderr, "%s:%d: assertion failed!\n", file, line)
         C.exit(1)
-    end
-end
-
-function B.assert.codegen(ast, ctxt)
-    local test = ast.params[1]
-    local code = test:codegen(ctxt)
-    
-    local tassert = ebbAssert
-
-    if test.node_type:isvector() then
-        local N      = test.node_type.N
-        local vec    = symbol(test.node_type:terratype())
-
-        local all    = `true
-        for i = 0, N-1 do
-            all = `all and vec.d[i]
-        end
-
-        return quote
-            var [vec] = [code]
-        in
-            tassert(all, ast.filename, ast.linenumber)
-        end
-    else
-        return quote tassert(code, ast.filename, ast.linenumber) end
     end
 end
 
@@ -444,86 +343,6 @@ local function printSingle (bt, exp, elemQuotes)
     end
 end
 
-local function buildPrintSpec(ctxt, output, printSpec, elemQuotes, definitions)
-    local lt   = output.node_type
-    local tt   = lt:terratype()
-    local code = output:codegen(ctxt)
-
-    if lt:isvector() then
-        printSpec = printSpec .. "{"
-        local sym = symbol(tt)
-        local bt = lt:basetype()
-        definitions = quote
-            [definitions]
-            var [sym] = [code]
-        end
-        for i = 0, lt.N - 1 do
-            printSpec = printSpec .. ' ' ..
-                        printSingle(bt, `sym.d[i], elemQuotes)
-        end
-        printSpec = printSpec .. " }"
-
-    elseif lt:ismatrix() then
-        printSpec = printSpec .. '{'
-        local sym = symbol(tt)
-        local bt = lt:basetype()
-        definitions = quote
-            [definitions]
-            var [sym] = [code]
-        end
-        for i = 0, lt.Nrow - 1 do
-            printSpec = printSpec .. ' {'
-            for j = 0, lt.Ncol - 1 do
-                printSpec = printSpec .. ' ' ..
-                            printSingle(bt, `sym.d[i][j], elemQuotes)
-            end
-            printSpec = printSpec .. ' }'
-        end
-        printSpec = printSpec .. ' }'
-    elseif lt:isscalarkey() then
-        if lt.ndims == 1 then
-            printSpec = printSpec ..
-                        printSingle(uint64T, `code.a0, elemQuotes)
-        else
-            local sym = symbol(lt:terratype())
-            definitions = quote
-                [definitions]
-                var [sym] = [code]
-            end
-            printSpec = printSpec .. '{'
-            for i = 0, lt.ndims-1 do
-                local astr = 'a'..tostring(i)
-                printSpec = printSpec .. ' ' ..
-                            printSingle(uint64T, `sym.[astr], elemQuotes)
-            end
-            printSpec = printSpec .. ' }'
-        end
-    elseif lt:isvalue() then
-        printSpec = printSpec .. printSingle(lt, code, elemQuotes)
-    else
-        assert(false and "printed object should always be number, bool, or vector")
-    end
-    return printSpec, elemQuotes, definitions
-end
-
-function B.print.codegen(ast, ctxt)
-    local printSpec   = ''
-    local elemQuotes  = {}
-    local definitions = quote end
-
-    for i,output in ipairs(ast.params) do
-        printSpec, elemQuotes, definitions = buildPrintSpec(ctxt, output, printSpec, elemQuotes, definitions)
-        local t = ast.params[i+1] and " " or ""
-        printSpec = printSpec .. t
-    end
-    printSpec = printSpec .. "\n"
-
-    local printf = C.printf
-	return quote [definitions] in printf(printSpec, elemQuotes) end
-end
-
-
-
 B.rand = Builtin.new()
 function B.rand.check(ast, ctxt)
     local args = ast.params
@@ -534,25 +353,6 @@ function B.rand.check(ast, ctxt)
         return doubleT
     end
 end
-local cpu_randinitialized = false
-function B.rand.codegen(ast, ctxt)
-    local rand
-    local RAND_MAX
-    -- make sure we're seeded
-    if not cpu_randinitialized then
-        cpu_randinitialized = true
-        C.srand(0) --cmath.time(nil)
-    end
-    rand = `C.rand()
-    RAND_MAX = C.RAND_MAX
-
-    -- reciprocal
-    --local reciprocal = terralib.constant(double, 1/(1.0e32-1.0))
-    return `[double](rand) / RAND_MAX
-end
--- SHOULD expose some randomness controls here...
-
-
 
 B.dot = Builtin.new()
 function B.dot.check(ast, ctxt)
@@ -580,33 +380,6 @@ function B.dot.check(ast, ctxt)
 
     return errorT
 end
-
-function B.dot.codegen(ast, ctxt)
-    local args = ast.params
-
-    local N     = args[1].node_type.N
-    local lhtyp = args[1].node_type:terratype()
-    local rhtyp = args[2].node_type:terratype()
-    local lhe   = args[1]:codegen(ctxt)
-    local rhe   = args[2]:codegen(ctxt)
-
-    local lhval = symbol(lhtyp)
-    local rhval = symbol(rhtyp)
-
-    local exp = `0
-    for i = 0, N-1 do
-        exp = `exp + lhval.d[i] * rhval.d[i]
-    end
-
-    return quote
-        var [lhval] = [lhe]
-        var [rhval] = [rhe]
-    in
-        exp
-    end
-end
-
-
 
 B.cross = Builtin.new()
 function B.cross.check(ast, ctxt)
@@ -636,30 +409,6 @@ function B.cross.check(ast, ctxt)
     return errorT
 end
 
-function B.cross.codegen(ast, ctxt)
-    local args = ast.params
-
-    local lhtyp = args[1].node_type:terratype()
-    local rhtyp = args[2].node_type:terratype()
-    local lhe   = args[1]:codegen(ctxt)
-    local rhe   = args[2]:codegen(ctxt)
-
-    local typ = T.type_join(args[1].node_type, args[2].node_type)
-
-    return quote
-        var lhval : lhtyp = [lhe]
-        var rhval : rhtyp = [rhe]
-    in 
-        [typ:terratype()]({ arrayof( [typ:terrabasetype()],
-            lhval.d[1] * rhval.d[2] - lhval.d[2] * rhval.d[1],
-            lhval.d[2] * rhval.d[0] - lhval.d[0] * rhval.d[2],
-            lhval.d[0] * rhval.d[1] - lhval.d[1] * rhval.d[0]
-        )})
-    end
-end
-
-
-
 B.length = Builtin.new()
 function B.length.check(ast, ctxt)
     local args = ast.params
@@ -677,29 +426,6 @@ function B.length.check(ast, ctxt)
     end
     if lt:basetype() == floatT then return floatT
                                 else return doubleT end
-end
-
-function B.length.codegen(ast, ctxt)
-    local args = ast.params
-
-    local N      = args[1].node_type.N
-    local typ    = args[1].node_type:terratype()
-    local exp    = args[1]:codegen(ctxt)
-
-    local vec    = symbol(typ)
-
-    local len2 = `0
-    for i = 0, N-1 do
-        len2 = `len2 + vec.d[i] * vec.d[i]
-    end
-
-    local sqrt = C.sqrt
-
-    return quote
-        var [vec] = [exp]
-    in
-        sqrt( len2 )
-    end
 end
 
 function Builtin.newDoubleFunction(name)
@@ -768,41 +494,6 @@ local function minmax_check(ast, ctxt, name)
 end
 function B.fmin.check(ast, ctxt) return minmax_check(ast, ctxt, 'fmin') end
 function B.fmax.check(ast, ctxt) return minmax_check(ast, ctxt, 'fmax') end
-function B.fmin.codegen(ast, ctxt)
-    local lhs, rhs = ast.params[1]:codegen(ctxt), ast.params[2]:codegen(ctxt)
-    return `C.fmin(lhs, rhs)
-end
-function B.fmax.codegen(ast, ctxt)
-    local lhs, rhs = ast.params[1]:codegen(ctxt), ast.params[2]:codegen(ctxt)
-    return `C.fmax(lhs, rhs)
-end
-
-
---terra b_and (a : int, b : int)
---    return a and b
---end
---L.band = Builtin.new(b_and)
---function L.band.check (ast, ctxt)
---    local args = ast.params
---    if #args ~= 2 then ctxt:error(ast, "binary_and expects 2 arguments "..
---                                       "(instead got " .. #args .. ")")
---        return errorT
---    end
---    for i = 1, #args do
---        local lt = args[i].node_type
---        if lt ~= intT then
---            ctxt:error(args[i], "argument "..i..
---                                "to binary_and must be numeric")
---            return errorT
---        end
---    end
---    return intT
---end
---function L.band.codegen(ast, ctxt)
---    local exp1 = ast.params[1]:codegen(ctxt)
---    local exp2 = ast.params[2]:codegen(ctxt)
---    return `b_and([exp1], [exp2])
---end
 
 B.pow = Builtin.new(C.pow)
 function B.pow.check (ast, ctxt)
@@ -825,11 +516,6 @@ function B.pow.check (ast, ctxt)
         end
     end
     return doubleT
-end
-function B.pow.codegen(ast, ctxt)
-    local exp1 = ast.params[1]:codegen(ctxt)
-    local exp2 = ast.params[2]:codegen(ctxt)
-    return `C.pow([exp1], [exp2])
 end
 
 B.fmod = Builtin.new(C.fmod)
@@ -854,12 +540,6 @@ function B.fmod.check (ast, ctxt)
     end
     return doubleT
 end
-function B.fmod.codegen(ast, ctxt)
-    local exp1 = ast.params[1]:codegen(ctxt)
-    local exp2 = ast.params[2]:codegen(ctxt)
-    return `C.fmod([exp1], [exp2])
-end
-
 
 
 B.all = Builtin.new()
@@ -877,28 +557,6 @@ function B.all.check(ast, ctxt)
     return boolT
 end
 
-function B.all.codegen(ast, ctxt)
-    local args = ast.params
-
-    local N      = args[1].node_type.N
-    local typ    = args[1].node_type:terratype()
-    local exp    = args[1]:codegen(ctxt)
-
-    local val    = symbol(typ)
-
-    local outexp = `true
-    for i = 0, N-1 do
-        outexp = `outexp and val.d[i]
-    end
-
-    return quote
-        var [val] = [exp]
-    in
-        outexp
-    end
-end
-
-
 
 B.any = Builtin.new()
 function B.any.check(ast, ctxt)
@@ -914,28 +572,6 @@ function B.any.check(ast, ctxt)
     end
     return boolT
 end
-
-function B.any.codegen(ast, ctxt)
-    local args   = ast.params
-
-    local N      = args[1].node_type.N
-    local typ    = args[1].node_type:terratype()
-    local exp    = args[1]:codegen(ctxt)
-
-    local val    = symbol(typ)
-
-    local outexp = `false
-    for i = 0, N-1 do
-        outexp = `outexp or val.d[i]
-    end
-
-    return quote
-        var [val] = [exp]
-    in
-        outexp
-    end
-end
-
 
 
 local function map(fn, list)
@@ -980,27 +616,9 @@ local function TerraCheck(func)
     end
 end
 
-local function TerraCodegen(func)
-    return function (ast, ctxt)
-        local args = ast.params
-        local argsyms = map(GetTypedSymbol, args)
-        local init_params = quote end
-        for i = 1, #args do
-            local code = args[i]:codegen(ctxt)
-            init_params = quote
-                init_params
-                var [argsyms[i]] = code
-            end
-        end
-        return quote init_params in func(argsyms) end
-    end 
-end
-
-
 function B.terra_to_func(terrafn)
     local newfunc = Builtin.new()
     newfunc.is_a_terra_func = true
-    newfunc.check, newfunc.codegen = TerraCheck(terrafn), TerraCodegen(terrafn)
+    newfunc.check = TerraCheck(terrafn)
     return newfunc
 end
-

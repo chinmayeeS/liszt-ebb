@@ -35,6 +35,7 @@
 
 local Pre = {}
 package.loaded["ebb.src.prelude"] = Pre
+local AL    = require "ebb.src.api_log"
 
 -------------------------------------------------------------------------------
 
@@ -73,7 +74,7 @@ function Pre.Global (typ, init)
 
   local s  = setmetatable({_type=typ}, Global)
 
-  -- TODO
+  AL.RecordAPICall('NewGlobal', {typ, init}, s)
 
   return s
 end
@@ -83,12 +84,16 @@ function Global:__newindex(fieldname,value)
 end
 
 function Global:set(val)
-  -- TODO
+  if not T.luaValConformsToType(val, self._type) then
+    error("value does not conform to type of global: "..
+          tostring(self._type), 2)
+  end
+  AL.RecordAPICall('SetGlobal', {self, val}, nil)
 end
 
 function Global:get()
   local value = nil
-  -- TODO
+  AL.RecordAPICall('GetGlobal', {self}, nil)
   return value
 end
 
@@ -146,4 +151,3 @@ end
 function Macro:__newindex(fieldname,value)
   error("Cannot assign members to Macro object", 2)
 end
-

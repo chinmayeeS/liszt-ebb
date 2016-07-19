@@ -243,13 +243,9 @@ ALL_DEP += $(LIBMAPPER_DEBUG) $(LIBMAPPER_RELEASE)
 ALL_DEP += $(LIBLEGION_UTILS_DEBUG) $(LIBLEGION_UTILS_RELEASE)
 endif
 
-.PHONY: all clean test lmesh
+.PHONY: all clean test
 
 all: $(ALL_DEP)
-
-# This is a deprecated legacy build
-lmesh:
-	$(MAKE) -C deprecated/deprecated_runtime
 
 # auto-download rule, or make symlink to local copy rule
 terra:
@@ -400,8 +396,6 @@ ifdef LEGION_SYMLINK_EXISTS # don't try to recursively call into nowhere
 endif
 
 clean: mapperclean legionutilsclean
-	$(MAKE) -C deprecated/deprecated_runtime clean
-	-rm -r vdb*
 	-rm -r bin
 	-rm -r build
 ifdef LEGION_SYMLINK_EXISTS # don't try to recursively call into nowhere

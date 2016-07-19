@@ -31,7 +31,6 @@ local F     = require "ebb.src.functions"
 local AL    = require "ebb.src.api_log"
 
 local keyT      = T.key
-local recordT   = T.record
 
 local is_macro      = Pre.is_macro
 local is_function   = F.is_function
@@ -499,14 +498,11 @@ end
 -------------------------------------------------------------------------------
 --[[  High-Level Loading and Dumping Operations (Lua and Terra)            ]]--
 
-function Field:Load(arg)
-  if not type(arg) == 'table' and
-         (self._type:isprimitive() or
-         (self._type:isvector() and #arg == self._type.N) or
-         (self._type:ismatrix() and #arg == self._type.Nrow)) then
-    error('Can only load constants into fields')
+function Field:Load(val)
+  if not T.luaValConformsToType(val, self._type) then
+    error('Value to be loaded does not match field type', 2)
   end
-  AL.RecordAPICall('LoadField', { self, arg }, nil)
+  AL.RecordAPICall('LoadField', { self, val }, nil)
 end
 
 

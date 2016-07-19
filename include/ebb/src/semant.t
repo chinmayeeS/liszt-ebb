@@ -51,14 +51,7 @@ local queryT    = T.query
 local vectorT   = T.vector
 local matrixT   = T.matrix
 
---local is_relation   = R.is_relation
---local is_builtin    = B.is_builtin
 local is_macro      = Pre.is_macro
---local is_field      = R.is_field
---local is_function   = F.is_function
-
---local isfielddispatcher = R.isfielddispatcher
-
 
 local MAX_INT_32, MIN_INT_32 = math.pow(2,31)-1, -math.pow(2,31)
 local function is_int32(x)

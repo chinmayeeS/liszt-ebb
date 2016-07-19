@@ -151,39 +151,6 @@ end
 
 -------------------------------------------------------------------------------
 
-local record_types = {}
-local function recordType (rec)
-  if type(rec) ~= 'table' then
-    error('invalid argument to record type constructor:\n'..
-          '  must supply a table', 2)
-  end
-  -- string for de-duplicating types
-  local unique_str = '{'
-  -- build the string and check the types
-  for name, typ in pairs_sorted(rec) do
-    if type(name) ~= 'string' then
-      error('invalid argument to record type constructor:\n'..
-            '  table keys must be strings', 2)
-    end
-    if not T.istype(typ) or
-       not (typ:isvalue() or typ:iskey())
-    then
-      error('invalid argument to record type constructor:\n'..
-            '  table values must be valid types for fields, not '..
-            tostring(typ), 2)
-    end
-    unique_str = unique_str .. tostring(name) .. '=' .. tostring(typ) .. ','
-  end
-  unique_str = unique_str .. '}'
-
-  if not record_types[unique_str] then
-    local rt = NewType("record")
-    rt.rec = rec
-    record_types[unique_str] = rt
-  end
-  return record_types[unique_str]
-end
-
 local internal_cache = {}
 local function internalType(obj)
   if internal_cache[obj] then return internal_cache[obj] end
@@ -222,7 +189,6 @@ end
 T.vector        = vectorType
 T.matrix        = matrixType
 T.key           = keyType
-T.record        = recordType
 T.internal      = internalType
 T.error         = NewType("error")
 
@@ -251,9 +217,6 @@ function Type:isinternal()
 end
 function Type:iserror()
   return self.kind == "error"
-end
-function Type:isrecord()
-  return self.kind == "record"
 end
 
 -- These types represent Ebb values (not keys though)
@@ -305,16 +268,12 @@ function Type:basetype()
 end
 
 local struct emptyStruct {}
-local struct  QueryType {
-    start : uint64;
-    finish : uint64;
-}
+
 function Type:terratype()
   if     self:isprimitive()   then return self._terra_type
   elseif self:isvector()      then return self._terra_type
   elseif self:ismatrix()      then return self._terra_type
   elseif self:iskey()         then return self._terra_type
-  elseif self:isquery()       then return QueryType
   elseif self:isinternal()    then return emptyStruct
   elseif self:iserror()       then return emptyStruct
   end
@@ -329,6 +288,7 @@ end
 -------------------------------------------------------------------------------
 --[[ Stringify types                                                       ]]--
 -------------------------------------------------------------------------------
+
 function Type:__tostring()
   if     self:isprimitive()   then return self.name
   elseif self:isvector()      then return 'Vector('..tostring(self.type)..
@@ -338,18 +298,6 @@ function Type:__tostring()
                                           tostring(self.Nrow)..','..
                                           tostring(self.Ncol)..')'
   elseif self:isscalarkey()   then return 'Key('..self.relation:Name()..')'
-  elseif self:isrecord()      then
-    local str = 'Record({ '
-    local first_pair = true
-    for name, typ in pairs_sorted(self.rec) do
-      if first_pair then first_pair = false
-      else str = str .. ', ' end
-      str = str .. name .. '=' .. tostring(typ)
-    end
-    str = str .. ' })'
-    return str
-  elseif self:isquery()     then return 'Query('..self.relation:Name()..').'
-                                        ..table.concat(self.projections,'.') 
   elseif self:isinternal()  then return 'Internal('..tostring(self.value)..')'
   elseif self:iserror()     then return 'error'
   end
@@ -503,6 +451,7 @@ end
 -------------------------------------------------------------------------------
 
 local function luaValConformsToType (luaval, tp)
+  print(tp)
   -- primitives
   if tp:isprimitive() then
     return (tp:isnumeric() and type(luaval) == 'number') or
@@ -551,95 +500,11 @@ local function luaValConformsToType (luaval, tp)
   return false
 end
 
-local function luaToEbbVal (luaval, typ)
-  if typ:isprimitive() then
-    return luaval
-
-  elseif typ:isscalarkey() then
-    if typ.ndims == 1 then
-      return terralib.new(typ:terratype(), { luaval })
-    else
-      return terralib.new(typ:terratype(), luaval)
-    end
-
-  elseif typ:isvector() then
-    local btyp      = typ:basetype()
-    local terraval = terralib.new(typ:terratype())
-    for i=1,typ.N do terraval.d[i-1] = luaToEbbVal(luaval[i], btyp) end
-    return terraval
-
-  elseif typ:ismatrix() then
-    local btyp      = typ:basetype()
-    local terraval = terralib.new(typ:terratype())
-    for r=1,typ.Nrow do for c=1,typ.Ncol do
-      terraval.d[r-1][c-1] = luaToEbbVal(luaval[r][c], btyp)
-    end end
-    return terraval
-
-  else
-    error('INTERNAL: Should not try to convert lua values to this type: '..
-          tostring(typ))
-  end
-end
-
-local function ebbToLuaVal(lzval, typ)
-  if typ:isprimitive() then
-    if typ:isnumeric() then
-      return tonumber(lzval)
-    elseif typ:islogical() then
-      if type(lzval) == 'cdata' then
-        return not (lzval == 0)
-      else
-        return lzval
-      end
-    end
-
-  elseif typ:isscalarkey() then
-    if typ.ndims == 1 then
-      return tonumber(lzval.a0)
-    elseif typ.ndims == 2 then
-      return { tonumber(lzval.a0), tonumber(lzval.a1) }
-    elseif typ.ndims == 3 then
-      return { tonumber(lzval.a0), tonumber(lzval.a1), tonumber(lzval.a2) }
-    else
-      error('INTERNAL: Cannot have > 3 dimensional keys')
-    end
-
-  elseif typ:isvector() then
-    local vec = {}
-    for i=1,typ.N do
-      vec[i] = ebbToLuaVal(lzval.d[i-1], typ:basetype())
-    end
-    return vec
-
-  elseif typ:ismatrix() then
-    local mat = {}
-    for r=1,typ.Nrow do
-      mat[r] = {}
-      for c=1,typ.Ncol do
-        mat[r][c] = ebbToLuaVal(lzval.d[r-1][c-1], typ:basetype())
-      end
-    end
-    return mat
-
-  else
-    error('INTERNAL: Should not try to convert lua values from this type: '..
-          tostring(typ))
-  end
-end
-
 -- converts a terra vector or primitive type into an ebb type
 local function terraToEbbType (tp)
   -- return primitive type
   local typ = terraprimitive_to_ebb[tp]
   if typ then return typ end
-  
-  -- return vector type  (WARNING: different backing for types now...)
-  --if tp:isvector() then
-  --  local p = terraToEbbType(tp.type)
-  --  return p and T.vector(p,tp.N)
-  --end
-  
   return nil
 end
 
@@ -675,12 +540,8 @@ end
 -------------------------------------------------------------------------------
 --[[ export type api                                                       ]]--
 -------------------------------------------------------------------------------
-T.type_join             = type_join
-T.luaValConformsToType  = luaValConformsToType
-T.luaToEbbVal           = luaToEbbVal
-T.ebbToLuaVal           = ebbToLuaVal
 
+T.luaValConformsToType  = luaValConformsToType
+T.type_join             = type_join
 T.terraToEbbType        = terraToEbbType
 T.Type = Type
-
---return T
