@@ -67,22 +67,6 @@ function B.is_builtin(f)
     return getmetatable(f) == Builtin
 end
 
-
--- internal macro style built-in
-B.Where = Builtin.new()
-function B.Where.check(call_ast, ctxt)
-    if #(call_ast.params) ~= 2 then
-        ctxt:error(ast, "Where expects exactly 2 arguments")
-        return errorT
-    end
-
-    local w = AST.Where:DeriveFrom(call_ast)
-    w.field = call_ast.params[1]
-    w.key   = call_ast.params[2]
-    return w:check(ctxt)
-end
-
-
 local function id_checks(fname, ast, ctxt, args)
     if #args ~= 1 then 
         ctxt:error(ast, fname.." expects exactly 1 argument (instead got " ..

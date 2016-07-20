@@ -58,7 +58,6 @@ end
 -------------------------------------------------------------------------------
 
 local B       = require "ebb.src.builtins"
-L.Where           = B.Where
 L.Affine          = B.Affine
 
 L.print           = B.print

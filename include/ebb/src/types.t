@@ -451,7 +451,6 @@ end
 -------------------------------------------------------------------------------
 
 local function luaValConformsToType (luaval, tp)
-  print(tp)
   -- primitives
   if tp:isprimitive() then
     return (tp:isnumeric() and type(luaval) == 'number') or
