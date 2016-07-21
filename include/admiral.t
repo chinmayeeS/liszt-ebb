@@ -334,12 +334,12 @@ function AST.Call:toRExpr(ctxt)
     if N == 2 then
       local x = mat[1][3]
       local y = mat[2][3]
-      return rexpr base + {x,y} end
+      return rexpr (base + {x,y}) % [ctxt.universe].bounds end
     elseif N == 3 then
       local x = mat[1][4]
       local y = mat[2][4]
       local z = mat[3][4]
-      return rexpr base + {x,y,z} end
+      return rexpr (base + {x,y,z}) % [ctxt.universe].bounds end
     else assert(false) end
   end
   -- Single-argument arithmetic function:
