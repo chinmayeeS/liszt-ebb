@@ -60,6 +60,8 @@ local function quit(obj)
   assert(false)
 end
 
+-------------------------------------------------------------------------------
+
 -- terralib.type -> number
 local function minValue(typ)
   return
@@ -110,6 +112,30 @@ local function opIdentity(op, typ)
     assert(false)
 end
 
+-- map(B.Builtin, (double -> double))
+local unaryArithFuns = {
+  [L.acos]  = C.acos,
+  [L.asin]  = C.asin,
+  [L.atan]  = C.atan,
+  [L.cbrt]  = C.cbrt,
+  [L.ceil]  = C.ceil,
+  [L.cos]   = C.cos,
+  [L.fabs]  = C.fabs,
+  [L.floor] = C.floor,
+  [L.fmod]  = C.fmod,
+  [L.log]   = C.log,
+  [L.pow]   = C.pow,
+  [L.sin]   = C.sin,
+  [L.sqrt]  = C.sqrt,
+  [L.tan]   = C.tan,
+}
+
+-- map(B.Builtin, (double, double -> double))
+local binaryArithFuns = {
+  [L.fmax]  = C.fmax,
+  [L.fmin]  = C.fmin,
+}
+
 -------------------------------------------------------------------------------
 
 -- T.Type -> terralib.type
@@ -140,7 +166,6 @@ R.Relation.fieldSpace = terralib.memoize(function(self)
   for _,fld in ipairs(self._fields) do
     fs.entries:insert({fld:Name(), toRType(fld:Type())})
   end
-  fs:printpretty()
   return fs
 end)
 
@@ -310,7 +335,7 @@ function AST.Call:toRExpr(ctxt)
   -- self.func   : B.Builtin
   -- self.params : table*
   assert(L.is_builtin(self.func))
-  -- Affine expression:
+  -- Affine expression
   -- self.params[1] : AST.LuaObject
   --   .node_type.value : R.Relation
   -- self.params[2] : AST.MatrixLiteral
@@ -342,28 +367,50 @@ function AST.Call:toRExpr(ctxt)
       return rexpr (base + {x,y,z}) % [ctxt.universe].bounds end
     else assert(false) end
   end
-  -- Single-argument arithmetic function:
+  -- Assertion
   -- self.params[1] : AST.Expression
-  local arg = self.params[1]:toRExpr(ctxt)
-  return
-    (self.func == L.acos)  and rexpr C.acos(arg) end or
-    (self.func == L.asin)  and rexpr C.asin(arg) end or
-    (self.func == L.atan)  and rexpr C.atan(arg) end or
-    (self.func == L.cbrt)  and rexpr C.cbrt(arg) end or
-    (self.func == L.ceil)  and rexpr C.ceil(arg) end or
-    (self.func == L.cos)   and rexpr C.cos(arg) end or
-    (self.func == L.fabs)  and rexpr C.fabs(arg) end or
-    (self.func == L.floor) and rexpr C.floor(arg) end or
-    (self.func == L.fmod)  and rexpr C.fmod(arg) end or
-    (self.func == L.log)   and rexpr C.log(arg) end or
-    (self.func == L.pow)   and rexpr C.pow(arg) end or
-    (self.func == L.sin)   and rexpr C.sin(arg) end or
-    (self.func == L.sqrt)  and rexpr C.sqrt(arg) end or
-    (self.func == L.tan)   and rexpr C.tan(arg) end or
-    assert(false)
+  if self.func == L.assert then
+    return rexpr regentlib.assert([ self.params[1]:toRExpr(ctxt) ]) end
+  end
+  -- Key unboxing
+  -- self.params[1] : AST.Expression
+  if self.func == L.id then
+    -- TODO: Need to do something extra here?
+    return self.params[1]:toRExpr(ctxt)
+  elseif self.func == L.xid then
+    return rexpr [ self.params[1]:toRExpr(ctxt) ].x end
+  elseif self.func == L.yid then
+    return rexpr [ self.params[1]:toRExpr(ctxt) ].y end
+  elseif self.func == L.zid then
+    return rexpr [ self.params[1]:toRExpr(ctxt) ].z end
+  end
+  -- Unary arithmetic function
+  -- self.params[1] : AST.Expression
+  if unaryArithFuns[self.func] then
+    local arg = self.params[1]:toRExpr(ctxt)
+    return rexpr [ unaryArithFuns[self.func] ](arg) end
+  end
+  -- Binary arithmetic function
+  -- self.params[1] : AST.Expression
+  -- self.params[2] : AST.Expression
+  if binaryArithFuns[self.func] then
+    local arg1 = self.params[1]:toRExpr(ctxt)
+    local arg2 = self.params[2]:toRExpr(ctxt)
+    return rexpr [ binaryArithFuns[self.func] ](arg1, arg2) end
+  end
+  -- TODO: Not covered:
+  -- L.print L.rand
+  -- L.dot L.cross L.length
+  -- L.UNSAFE_ROW
+  assert(false)
 end
 function AST.Cast:toRExpr(ctxt)
-  quit(self)
+  -- self.node_type : T.Type
+  -- self.value     : AST.Expression
+  local rtype = toRType(self.node_type)
+  return rexpr
+    [rtype]([self.value:toRExpr(ctxt)])
+  end
 end
 function AST.FieldAccess:toRExpr(ctxt)
   -- self.field : R.Field
@@ -436,7 +483,11 @@ function AST.Statement:toRQuote(ctxt)
   error('Abstract Method')
 end
 function AST.Assignment:toRQuote(ctxt)
-  quit(self)
+  -- self.lvalue : AST.Expression
+  -- self.exp    : AST.Expression
+  return rquote
+    [self.lvalue:toRExpr(ctxt)] = [self.exp:toRExpr(ctxt)]
+  end
 end
 function AST.Break:toRQuote(ctxt)
   quit(self)
@@ -457,7 +508,8 @@ function AST.DoStatement:toRQuote(ctxt)
   quit(self)
 end
 function AST.ExprStatement:toRQuote(ctxt)
-  quit(self)
+  -- self.exp : AST.Expression
+  return rquote [self.exp:toRExpr(ctxt)] end
 end
 function AST.FieldWrite:toRQuote(ctxt)
   -- self.fieldaccess : AST.FieldAccess
@@ -486,7 +538,22 @@ function AST.GlobalReduce:toRQuote(ctxt)
     assert(false)
 end
 function AST.IfStatement:toRQuote(ctxt)
-  quit(self)
+  -- self.if_blocks  : AST.CondBlock*
+  -- self.else_block : AST.Block
+  local quot
+  for i=#self.if_blocks,1,-1 do
+    local cond = self.if_blocks[i].cond:toRExpr(ctxt)
+    local body = self.if_blocks[i].body:toRQuote(ctxt)
+    if quot then
+      quot = rquote if [cond] then [body] else [quot] end end
+    elseif self.else_block then
+      local innerElse = self.else_block:toRQuote(ctxt)
+      quot = rquote if [cond] then [body] else [innerElse] end end
+    else
+      quot = rquote if [cond] then [body] end end
+    end
+  end
+  return quot
 end
 function AST.InsertStatement:toRQuote(ctxt)
   quit(self)
@@ -510,11 +577,6 @@ function AST.Block:toRQuote(ctxt)
   return rquote
     [stmtQuotes]
   end
-end
-
--- () -> RG.rquote
-function AST.CondBlock:toRQuote()
-  quit(self)
 end
 
 -- () -> RG.task

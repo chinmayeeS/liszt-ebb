@@ -89,6 +89,6 @@ end
 
 -------------------------------------------------------------------------------
 
-LOG.log:print()
+-- LOG.log:print()
 
-measure_max_diff:toTask():printpretty()
+check_vals:toTask():printpretty()
