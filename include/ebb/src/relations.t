@@ -366,7 +366,15 @@ local function is_subrectangle(rel, obj)
 end
 
 function Relation:_INTERNAL_NewSubsetFromRectangles(name, rectangles)
-  AL.RecordAPICall('NewRectangleSubset', {self, name, rectangles}, nil)
+  -- setup and install the subset object
+  local subset = setmetatable({
+    _owner    = self,
+    _name     = name,
+  }, Subset)
+  rawset(self, name, subset)
+  self._subsets:insert(subset)
+  AL.RecordAPICall('NewRectangleSubset', {self, name, rectangles}, subset)
+  return subset
 end
 
 function Relation:NewSubset( name, arg )

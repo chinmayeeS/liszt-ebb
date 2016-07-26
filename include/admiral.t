@@ -37,6 +37,8 @@ local R   = require 'ebb.src.relations'
 local RG  = regentlib
 local T   = require 'ebb.src.types'
 
+local DEBUG = true
+
 -------------------------------------------------------------------------------
 
 local function quit(obj)
@@ -139,8 +141,7 @@ local binaryArithFuns = {
 -------------------------------------------------------------------------------
 
 -- T.Type -> terralib.type
-local toRType
-toRType = terralib.memoize(function(ltype)
+local function toRType(ltype)
   if ltype:isprimitive() then
     return ltype:terratype()
   elseif ltype:isvector() then
@@ -148,7 +149,39 @@ toRType = terralib.memoize(function(ltype)
   elseif ltype:ismatrix() then
     return toRType(ltype.type)[ltype.Nrow][ltype.Ncol]
   else assert(false) end
-end)
+end
+
+-- Literal = boolean | number | Literal[N]
+-- terralib.type, Literal -> terralib.expr
+local function toTypedLiteral(typ, lit)
+  if type(lit) == 'boolean' then
+    assert(typ == boolean)
+    return `lit
+  elseif type(lit) == 'number' then
+    return `[typ](lit)
+  elseif type(lit) == 'table' then
+    assert(terralib.israwlist(lit))
+    assert(#lit == typ.N)
+    if #lit == 1 then
+      local a = toTypedLiteral(typ.type, lit[1])
+      return `arrayof(typ.type, a)
+    elseif #lit == 2 then
+      local a = toTypedLiteral(typ.type, lit[1])
+      local b = toTypedLiteral(typ.type, lit[2])
+      return `arrayof(typ.type, a, b)
+    elseif #lit == 3 then
+      local a = toTypedLiteral(typ.type, lit[1])
+      local b = toTypedLiteral(typ.type, lit[2])
+      local c = toTypedLiteral(typ.type, lit[3])
+      return `arrayof(typ.type, a, b, c)
+    else assert(false) end
+  else assert(false) end
+end
+
+-- terralib.type, Literal -> RG.rexpr
+local function toRLiteral(typ, lit)
+  return rexpr [terralib.constant(toTypedLiteral(typ, lit))] end
+end
 
 -- () -> RG.ispace_type
 function R.Relation:indexSpaceType()
@@ -162,10 +195,11 @@ end
 
 -- () -> terralib.struct
 R.Relation.fieldSpace = terralib.memoize(function(self)
-  local fs = terralib.types.newstruct(self:Name() .. 'Cols')
+  local fs = terralib.types.newstruct(self:Name() .. '_columns')
   for _,fld in ipairs(self._fields) do
     fs.entries:insert({fld:Name(), toRType(fld:Type())})
   end
+  if DEBUG then fs:printpretty() end
   return fs
 end)
 
@@ -175,6 +209,31 @@ function R.Relation:regionType()
   return region(self:indexSpaceType(), self:fieldSpace())
 end
 
+-- () -> RG.rexpr
+function R.Relation:mkISpaceInit()
+  local dims = self:Dims()
+  return
+    (#dims == 1) and rexpr
+      ispace(int1d, dims[1])
+    end or
+    (#dims == 2) and rexpr
+      ispace(int2d, { x = [dims[1]], y = [dims[2]] })
+    end or
+    (#dims == 3) and rexpr
+      ispace(int3d, { x = [dims[1]], y = [dims[2]], z = [dims[3]] })
+    end or
+    assert(false)
+end
+
+-- () -> RG.rexpr
+function R.Relation:mkRegionInit()
+  local ispaceExpr = self:mkISpaceInit()
+  local fspaceExpr = self:fieldSpace()
+  return rexpr region(ispaceExpr, fspaceExpr) end
+end
+
+-------------------------------------------------------------------------------
+
 local Context = {}
 Context.__index = Context
 
@@ -183,28 +242,46 @@ function Context.New(rel, argLSym)
   local dom = RG.newsymbol(rel:regionType(), 'dom')
   local univ = RG.newsymbol(rel:regionType(), rel:Name())
   return setmetatable({
-    _symMap         = {},   -- map(AST.Symbol, RG.symbol)
-    relation        = rel,  -- R.Relation
-    domain          = dom,  -- RG.symbol
-    universe        = univ, -- RG.symbol
-    reducedGlobal   = nil,  -- L.Global
-    globalReduceAcc = nil,  -- RG.symbol
-    globalReduceOp  = nil,  -- string
+    localMap        = {},                 -- map(AST.Symbol, RG.symbol)
+    globalMap       = {},                 -- map(L.Global, RG.symbol)
+    relation        = rel,                -- R.Relation
+    domain          = dom,                -- RG.symbol
+    universe        = univ,               -- RG.symbol
+    readGlobals     = terralib.newlist(), -- L.Global*
+    reducedGlobal   = nil,                -- L.Global
+    globalReduceAcc = nil,                -- RG.symbol
+    globalReduceOp  = nil,                -- string
   }, Context)
 end
 
 -- AST.Symbol -> RG.symbol
-function Context:add(lsym)
-  assert(not self._symMap[lsym])
-  -- TODO: Should use lsym:uniquestr() here?
+function Context:addLocal(lsym)
+  assert(not self.localMap[lsym])
   local rsym = RG.newsymbol(tostring(lsym))
-  self._symMap[lsym] = rsym
+  self.localMap[lsym] = rsym
   return rsym
 end
 
--- AST.Symbol -> RG.symbol
-function Context:find(lsym)
-  return assert(self._symMap[lsym])
+-- L.Global -> RG.symbol
+function Context:addGlobalRead(glob)
+  assert(not self.globalMap[glob])
+  local rsym = RG.newsymbol(toRType(glob:Type()))
+  self.globalMap[glob] = rsym
+  self.readGlobals:insert(glob)
+  return rsym
+end
+
+-- L.Global, string -> ()
+function Context:addGlobalReduce(glob, op)
+  assert(not self.reducedGlobal)
+  self.reducedGlobal = glob
+  self.globalReduceAcc = RG.newsymbol(toRType(glob:Type()), 'acc')
+  self.globalReduceOp = op
+end
+
+-- () -> RG.symbol*
+function Context:globalArgs()
+  return self.readGlobals:map(function(g) return self.globalMap[g] end)
 end
 
 -- FunInfo = {
@@ -215,7 +292,7 @@ end
 --   global_use     : map(L.Global, P.PhaseType)
 -- }
 
--- FunInfo -> RG.task
+-- FunInfo -> RG.task, Context
 function AST.UserFunction:toTask(info)
   -- self.params : AST.Symbol*
   -- self.body   : AST.Block
@@ -223,7 +300,7 @@ function AST.UserFunction:toTask(info)
   local ctxt = Context.New(info.relation, self.params[1])
   local dom = ctxt.domain
   local univ = ctxt.universe
-  local loopVar = ctxt:add(self.params[1])
+  local loopVar = ctxt:addLocal(self.params[1])
   -- Process field access modes
   local readCols    = terralib.newlist()
   local writeCols   = terralib.newlist()
@@ -251,17 +328,11 @@ function AST.UserFunction:toTask(info)
     end
   end
   -- Process global access modes
-  local readGlobals = terralib.newlist()
-  local globalArgs = terralib.newlist()
   for g,pt in pairs(info.global_use) do
     if pt.read and not pt.reduceop then
-      readGlobals:insert(g)
-      globalArgs:insert(RG.newsymbol(toRType(g:Type())))
+      ctxt:addGlobalRead(g)
     elseif pt.reduceop and not pt.read then
-      assert(not ctxt.reducedGlobal)
-      ctxt.reducedGlobal = g
-      ctxt.globalReduceAcc = RG.newsymbol(toRType(g:Type()), 'acc')
-      ctxt.globalReduceOp = pt.reduceop
+      ctxt:addGlobalReduce(g, pt.reduceop)
     else assert(false) end
   end
   -- Synthesize task
@@ -283,7 +354,7 @@ function AST.UserFunction:toTask(info)
       return [ctxt.globalReduceAcc]
     end)
   end
-  local task tsk( [dom], [univ], [globalArgs] ) where
+  local task tsk( [dom], [univ], [ctxt:globalArgs()] ) where
     dom <= univ,
     reads      (univ.[readCols]),
     writes     (univ.[writeCols]),
@@ -299,7 +370,8 @@ function AST.UserFunction:toTask(info)
   tsk:setname(info.name)
   tsk.ast.name[1] = info.name -- XXX: Dangerous
   -- TODO: Pass global-use information to the caller.
-  return tsk
+  if DEBUG then tsk:printpretty() end
+  return tsk, ctxt
 end
 
 -- Context -> RG.rexpr
@@ -370,7 +442,9 @@ function AST.Call:toRExpr(ctxt)
   -- Assertion
   -- self.params[1] : AST.Expression
   if self.func == L.assert then
-    return rexpr regentlib.assert([ self.params[1]:toRExpr(ctxt) ]) end
+    return rexpr
+      RG.assert([self.params[1]:toRExpr(ctxt)], 'assertion failed')
+    end
   end
   -- Key unboxing
   -- self.params[1] : AST.Expression
@@ -443,7 +517,7 @@ function AST.MatrixLiteral:toRExpr(ctxt)
 end
 function AST.Name:toRExpr(ctxt)
   -- self.name : AST.Symbol
-  return rexpr [ctxt:find(self.name)] end
+  return rexpr [ctxt.localMap[self.name]] end
 end
 function AST.Number:toRExpr(ctxt)
   -- self.value : number
@@ -496,7 +570,7 @@ function AST.DeclStatement:toRQuote(ctxt)
   -- self.name        : AST.Symbol
   -- self.node_type   : T.Type
   -- self.initializer : AST.Expression
-  local rsym = ctxt:add(self.name)
+  local rsym = ctxt:addLocal(self.name)
   return rquote
     var [rsym] = [self.initializer:toRExpr(ctxt)]
   end
@@ -529,10 +603,10 @@ function AST.GlobalReduce:toRQuote(ctxt)
   local acc = ctxt.globalReduceAcc
   local val = self.exp:toRExpr(ctxt)
   return
-    (self.reduceop == '+')   and rquote acc += val end or
-    (self.reduceop == '-')   and rquote acc -= val end or
-    (self.reduceop == '*')   and rquote acc *= val end or
-    (self.reduceop == '/')   and rquote acc /= val end or
+    (self.reduceop == '+')   and rquote acc += val   end or
+    (self.reduceop == '-')   and rquote acc -= val   end or
+    (self.reduceop == '*')   and rquote acc *= val   end or
+    (self.reduceop == '/')   and rquote acc /= val   end or
     (self.reduceop == 'max') and rquote acc max= val end or
     (self.reduceop == 'min') and rquote acc min= val end or
     assert(false)
@@ -579,7 +653,7 @@ function AST.Block:toRQuote(ctxt)
   end
 end
 
--- () -> RG.task
+-- () -> RG.task, Context
 function F.Function:toTask()
   local rawAST = self._decl_ast
   assert(#rawAST.params == 1)
@@ -597,4 +671,190 @@ function F.Function:toTask()
   info.name = self._name
   info.relation = argRel
   return info.typed_ast:toTask(info)
+end
+
+-- () -> boolean
+function F.Function:isKernel()
+  return (#self._decl_ast.params == 1 and
+          self._decl_ast.ptypes[1] and
+          self._decl_ast.ptypes[1]:iskey())
+end
+
+-------------------------------------------------------------------------------
+
+function A.translateAndRun()
+  local stmts = terralib.newlist()
+  -- Collect declarations
+  local globalInits = {} -- map(L.Global, Literal)
+  local rels = terralib.newlist() -- R.Relation*
+  local funs = terralib.newlist() -- F.Function*
+  local subsetDefs = {} -- map(R.Subset, (int[1-3][2])*)
+  for _,call in ipairs(LOG.log.entries) do
+    if call.name == 'ForEachCall' then
+      -- Do nothing
+    elseif call.name == 'GetGlobal' then
+      -- Do nothing
+    elseif call.name == 'LoadField' then
+      -- Do nothing
+    elseif call.name == 'NewField' then
+      -- Do nothing
+    elseif call.name == 'NewFunction' then
+      local f = call.return_val
+      if f:isKernel() then
+        funs:insert(f)
+      end
+    elseif call.name == 'NewGlobal' then
+      globalInits[call.return_val] = call.args[2]
+    elseif call.name == 'NewRectangleSubset' then
+      subsetDefs[call.return_val] = call.args[3]
+    elseif call.name == 'NewRelation' then
+      rels:insert(call.return_val)
+    elseif call.name == 'SetGlobal' then
+      -- Do nothing
+    elseif call.name == 'SetPartitions' then
+      assert(false)
+    else assert(false) end
+  end
+  -- Emit global declarations
+  local globalMap = {} -- map(L.Global, RG.symbol)
+  for g,val in pairs(globalInits) do
+    local typ = toRType(g:Type())
+    local x = RG.newsymbol(typ)
+    globalMap[g] = x
+    stmts:insert(rquote var [x] = [toRLiteral(typ, val)] end)
+  end
+  -- Emit region declarations
+  local relMap = {} -- map(R.Relation, RG.symbol)
+  for _,rel in ipairs(rels) do
+    local rg = RG.newsymbol(rel:Name())
+    relMap[rel] = rg
+    stmts:insert(rquote
+      var [rg] = [rel:mkRegionInit()]
+    end)
+  end
+  -- Emit subset declarations
+  local subsetMap = {} -- map(R.Subset, RG.symbol)
+  for subset,rects in pairs(subsetDefs) do
+    local rel = subset:Relation()
+    if #rects > 1 then
+      print('WARNING: Skipping multi-rect subset '..subset:FullName())
+    else
+      local rg = relMap[rel]
+      local subrg = RG.newsymbol(rel:Name()..'_'..subset:Name())
+      subsetMap[subset] = subrg
+      local rect = rects[1]
+      local rectExpr =
+        (#rect == 1) and rexpr
+          rect1d{ lo = [ rect[1][1] ],
+                  hi = [ rect[1][2] ]}
+        end or
+        (#rect == 2) and rexpr
+          rect2d{ lo = int2d{ x = [ rect[1][1] ],
+                              y = [ rect[2][1] ]},
+                  hi = int2d{ x = [ rect[1][2] ],
+                              y = [ rect[2][2] ]}}
+        end or
+        (#rect == 3) and rexpr
+          rect3d{ lo = int3d{ x = [ rect[1][1] ],
+                              y = [ rect[2][1] ],
+                              z = [ rect[3][1] ]},
+                  hi = int3d{ x = [ rect[1][2] ],
+                              y = [ rect[2][2] ],
+                              z = [ rect[3][2] ]}}
+        end or
+        assert(false)
+      stmts:insert(rquote
+        var colors = ispace(int1d, 1)
+        var coloring = RG.c.legion_domain_point_coloring_create()
+        var rect = [rectExpr]
+        RG.c.legion_domain_point_coloring_color_domain(coloring, int1d(0), rect)
+        var [subrg] = partition(disjoint, rg, coloring, colors)
+        RG.c.legion_domain_point_coloring_destroy(coloring)
+      end)
+    end
+  end
+  -- Emit tasks
+  local taskMap = {} -- map(F.Function, RG.task)
+  local funInfo = {} -- map(F.Function, Context)
+  for _,f in ipairs(funs) do
+    taskMap[f], funInfo[f] = f:toTask()
+  end
+  -- Process commands
+  for _,call in ipairs(LOG.log.entries) do
+    if call.name == 'ForEachCall' then
+      -- call.return_val : {
+      --   ...
+      --   ufunc    : F.Function
+      --   relation : R.Relation
+      --   subset   : R.Subset?
+      -- }
+      local tsk = taskMap[call.return_val.ufunc]
+      local info = funInfo[call.return_val.ufunc]
+      local univArg = relMap[call.return_val.relation]
+      local domArg = call.return_val.subset
+        and subsetMap[call.return_val.subset]
+        or univArg
+      local globalArgs =
+        info.readGlobals:map(function(g) return globalMap[g] end)
+      -- TODO: Temporary fix until argument splicing is implemented
+      -- local callExpr = rexpr [tsk]([domArg], [univArg], [globalArgs]) end
+      local callExpr
+      if #globalArgs == 0 then
+        callExpr = rexpr [tsk]([domArg], [univArg]) end
+      elseif #globalArgs == 1 then
+        callExpr = rexpr [tsk]([domArg], [univArg],
+                               [globalArgs[1]]) end
+      elseif #globalArgs == 2 then
+        callExpr = rexpr [tsk]([domArg], [univArg],
+                               [globalArgs[1]]
+                               [globalArgs[2]]) end
+      else assert(false) end
+      local callQuote = rquote [callExpr] end
+      if info.reducedGlobal then
+        local retSym = globalMap[info.reducedGlobal]
+        local op = info.globalReduceOp
+        callQuote =
+          (op == '+')   and rquote [retSym] +=   [callExpr] end or
+          (op == '-')   and rquote [retSym] -=   [callExpr] end or
+          (op == '*')   and rquote [retSym] *=   [callExpr] end or
+          (op == '/')   and rquote [retSym] /=   [callExpr] end or
+          (op == 'max') and rquote [retSym] max= [callExpr] end or
+          (op == 'min') and rquote [retSym] min= [callExpr] end or
+          assert(false)
+      end
+      stmts:insert(callQuote)
+    elseif call.name == 'GetGlobal' then
+      -- Do nothing
+    elseif call.name == 'LoadField' then
+      local fld = call.args[1]
+      local relSym = relMap[fld:Relation()]
+      local typ = toRType(fld:Type())
+      local val = call.args[2]
+      stmts:insert(rquote
+        fill(relSym.[fld:Name()], [toRLiteral(typ, val)])
+      end)
+    elseif call.name == 'NewField' then
+      -- Do nothing
+    elseif call.name == 'NewFunction' then
+      -- Do nothing
+    elseif call.name == 'NewGlobal' then
+      -- Do nothing
+    elseif call.name == 'NewRectangleSubset' then
+      -- Do nothing
+    elseif call.name == 'NewRelation' then
+      -- Do nothing
+    elseif call.name == 'SetGlobal' then
+      stmts:insert(rquote
+        [globalMap[call.args[1]]] = [call.args[2]]
+      end)
+    elseif call.name == 'SetPartitions' then
+      -- Do nothing
+    else assert(false) end
+  end
+  -- Synthesize main task
+  local task main()
+    [stmts]
+  end
+  if DEBUG then main:printpretty() end
+  RG.start(main)
 end

@@ -26,7 +26,6 @@ import 'ebb'
 local A    = require 'admiral'
 local GRID = require 'ebb.domains.grid'
 local L    = require 'ebblib'
-local LOG  = require 'ebb.src.api_log'
 
 -------------------------------------------------------------------------------
 
@@ -47,7 +46,7 @@ local conduction  = L.Constant(L.double, 1.0)
 
 local max_diff = L.Global(L.double, 0.0)
 local g_float  = L.Global(L.float, 0)
-local g_vec3d  = L.Global(L.vec3i, {0.1, 0.3, 0.9})
+local g_vec3d  = L.Global(L.vec3d, {0.1, 0.3, 0.9})
 
 -------------------------------------------------------------------------------
 
@@ -89,6 +88,4 @@ end
 
 -------------------------------------------------------------------------------
 
--- LOG.log:print()
-
-check_vals:toTask():printpretty()
+A.translateAndRun()
