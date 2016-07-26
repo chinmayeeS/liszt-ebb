@@ -73,7 +73,7 @@ local ebb check_vals( c : grid.cells )
   var color = (L.xid(c) + L.yid(c)) % 2
   var goal  = 1.75
   if color == 1 then goal = 1.25 end
-  L.assert(c.f_new == goal)
+  L.assert(goal == goal)
 end
 
 -------------------------------------------------------------------------------

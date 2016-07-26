@@ -152,35 +152,30 @@ local function toRType(ltype)
 end
 
 -- Literal = boolean | number | Literal[N]
--- terralib.type, Literal -> terralib.expr
-local function toTypedLiteral(typ, lit)
+-- terralib.type, Literal -> RG.rexpr
+local function toRLiteral(typ, lit)
   if type(lit) == 'boolean' then
     assert(typ == boolean)
-    return `lit
+    return rexpr lit end
   elseif type(lit) == 'number' then
-    return `[typ](lit)
+    return rexpr [typ](lit) end
   elseif type(lit) == 'table' then
     assert(terralib.israwlist(lit))
     assert(#lit == typ.N)
     if #lit == 1 then
-      local a = toTypedLiteral(typ.type, lit[1])
-      return `arrayof(typ.type, a)
+      local a = toRLiteral(typ.type, lit[1])
+      return rexpr array(a) end
     elseif #lit == 2 then
-      local a = toTypedLiteral(typ.type, lit[1])
-      local b = toTypedLiteral(typ.type, lit[2])
-      return `arrayof(typ.type, a, b)
+      local a = toRLiteral(typ.type, lit[1])
+      local b = toRLiteral(typ.type, lit[2])
+      return rexpr array(a, b) end
     elseif #lit == 3 then
-      local a = toTypedLiteral(typ.type, lit[1])
-      local b = toTypedLiteral(typ.type, lit[2])
-      local c = toTypedLiteral(typ.type, lit[3])
-      return `arrayof(typ.type, a, b, c)
+      local a = toRLiteral(typ.type, lit[1])
+      local b = toRLiteral(typ.type, lit[2])
+      local c = toRLiteral(typ.type, lit[3])
+      return rexpr array(a, b, c) end
     else assert(false) end
   else assert(false) end
-end
-
--- terralib.type, Literal -> RG.rexpr
-local function toRLiteral(typ, lit)
-  return rexpr [terralib.constant(toTypedLiteral(typ, lit))] end
 end
 
 -- () -> RG.ispace_type
@@ -443,7 +438,7 @@ function AST.Call:toRExpr(ctxt)
   -- self.params[1] : AST.Expression
   if self.func == L.assert then
     return rexpr
-      RG.assert([self.params[1]:toRExpr(ctxt)], 'assertion failed')
+      RG.assert([self.params[1]:toRExpr(ctxt)], '(Liszt assertion)')
     end
   end
   -- Key unboxing
