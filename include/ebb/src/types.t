@@ -178,6 +178,7 @@ local function keyType(relation)
   local ktyp        = NewType("key")
   ktyp.relation     = relation
   ktyp.ndims        = #relation:Dims()
+  keytype_cache[relation] = ktyp
   return ktyp
 end
 

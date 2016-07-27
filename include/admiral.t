@@ -40,6 +40,8 @@ local T   = require 'ebb.src.types'
 local DEBUG = true
 
 -------------------------------------------------------------------------------
+-- Helper functions
+-------------------------------------------------------------------------------
 
 local function quit(obj)
   print('====================')
@@ -61,8 +63,6 @@ local function quit(obj)
   end
   assert(false)
 end
-
--------------------------------------------------------------------------------
 
 -- terralib.type -> number
 local function minValue(typ)
@@ -114,6 +114,10 @@ local function opIdentity(op, typ)
     assert(false)
 end
 
+-------------------------------------------------------------------------------
+-- Basic Regent mappings
+-------------------------------------------------------------------------------
+
 -- map(B.Builtin, (double -> double))
 local unaryArithFuns = {
   [L.acos]  = C.acos,
@@ -137,8 +141,6 @@ local binaryArithFuns = {
   [L.fmax]  = C.fmax,
   [L.fmin]  = C.fmin,
 }
-
--------------------------------------------------------------------------------
 
 -- T.Type -> terralib.type
 local function toRType(ltype)
@@ -177,6 +179,10 @@ local function toRLiteral(typ, lit)
     else assert(false) end
   else assert(false) end
 end
+
+-------------------------------------------------------------------------------
+-- Relation-to-region translation
+-------------------------------------------------------------------------------
 
 -- () -> RG.ispace_type
 function R.Relation:indexSpaceType()
@@ -227,6 +233,8 @@ function R.Relation:mkRegionInit()
   return rexpr region(ispaceExpr, fspaceExpr) end
 end
 
+-------------------------------------------------------------------------------
+-- Kernel AST translation
 -------------------------------------------------------------------------------
 
 local Context = {}
@@ -676,6 +684,8 @@ function F.Function:isKernel()
 end
 
 -------------------------------------------------------------------------------
+-- Control program translation
+-------------------------------------------------------------------------------
 
 function A.translateAndRun()
   local stmts = terralib.newlist()
@@ -706,8 +716,6 @@ function A.translateAndRun()
       rels:insert(call.return_val)
     elseif call.name == 'SetGlobal' then
       -- Do nothing
-    elseif call.name == 'SetPartitions' then
-      assert(false)
     else assert(false) end
   end
   -- Emit global declarations
@@ -842,8 +850,6 @@ function A.translateAndRun()
       stmts:insert(rquote
         [globalMap[call.args[1]]] = [call.args[2]]
       end)
-    elseif call.name == 'SetPartitions' then
-      -- Do nothing
     else assert(false) end
   end
   -- Synthesize main task

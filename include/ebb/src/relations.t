@@ -512,14 +512,3 @@ function Field:Load(val)
   end
   AL.RecordAPICall('LoadField', { self, val }, nil)
 end
-
-
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
---[[  Partitioning relations                                               ]]--
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
-
-function Relation:SetPartitions(num_partitions)
-  AL.RecordAPICall('SetPartitions', {self, num_partitions}, nil)
-end
