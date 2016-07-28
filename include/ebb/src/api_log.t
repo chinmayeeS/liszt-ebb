@@ -1,93 +1,208 @@
 -- The MIT License (MIT)
--- 
+--
 -- Copyright (c) 2015 Stanford University.
 -- All rights reserved.
--- 
+--
 -- Permission is hereby granted, free of charge, to any person obtaining a
 -- copy of this software and associated documentation files (the "Software"),
 -- to deal in the Software without restriction, including without limitation
 -- the rights to use, copy, modify, merge, publish, distribute, sublicense,
 -- and/or sell copies of the Software, and to permit persons to whom the
 -- Software is furnished to do so, subject to the following conditions:
--- 
+--
 -- The above copyright notice and this permission notice shall be included
 -- in all copies or substantial portions of the Software.
--- 
+--
 -- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 -- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 -- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 -- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
--- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
+-- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 -- FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 -- DEALINGS IN THE SOFTWARE.
 
+import 'ebb.src.adt'
 
-local A = {}
-package.loaded["ebb.src.api_log"] = A
+local AL = {}
+package.loaded['ebb.src.api_log'] = AL
 
--- API log entry
-local APIEntry = {}
-APIEntry.__index = APIEntry
+local L = require 'ebblib'
+local isField    = function(x) return L.is_field(x) end
+local isFunction = function(x) return L.is_function(x) end
+local isGlobal   = function(x) return L.is_global(x) end
+local isRelation = function(x) return L.is_relation(x) end
+local isSubset   = function(x) return L.is_subset(x) end
 
-local function NewAPIEntry(call_name, args, return_val)
-  local entry = setmetatable({}, APIEntry)
-  entry.name       = call_name
-  entry.args       = args
-  entry.return_val = return_val
-  return entry
-end
+-------------------------------------------------------------------------------
+-- Control language AST
+-------------------------------------------------------------------------------
 
--- stringify lua values
-local function escape_str(s)
-  return string.gsub(s, "\"", "\\\"")
-end
-local function elem_stringify(k)
-  local typ = type(k)
-  if      typ == 'number'   then  return tostring(k)
-  elseif  typ == 'boolean'  then  return tostring(k)
-  elseif  typ == 'string'   then  return string.format('"%s"',escape_str(k))
-  else return tostring(k) end
-end
-function APIEntry:args_stringify()
-  local obj = self.args
-  local entries = terralib.newlist()
-  if terralib.israwlist(obj) then
-    for i=1,#obj do entries[i] = elem_stringify(obj[i]) end
-  else
-    for k,v in pairs(obj) do entries:insert(
-      string.format( '[%s]=%s', elem_stringify(k), elem_stringify(v) ))
+-- ExprConst = boolean | number | ExprConst[N]
+
+-- any -> boolean
+local function isExprConst(x)
+  if type(x) == 'boolean' or type(x) == 'number' then
+    return true
+  end
+  if not terralib.israwlist(x) then
+    return false
+  end
+  for _,elem in ipairs(x) do
+    if not isExprConst(elem) then
+      return false
     end
   end
-  return string.format( '{%s}', entries:concat(', ') )
+  return true
+end
+AL.isExprConst = isExprConst
+
+local ADT AST
+  Decl = NewField { fld : Field }
+       | NewFunction { fun : Function }
+       | NewGlobal { global : Global, init : ExprConst }
+       | NewRelation { rel : Relation }
+       | NewSubset { subset : Subset, rectangles : ExprConst }
+  Stmt = Block { stmts : Stmt* }
+       | ForEach { fun : Function, rel : Relation, subset : Subset? }
+       | If { cond : Cond, thenBlock : Stmt?, elseBlock : Stmt? }
+       | LoadField { fld : Field, val : ExprConst }
+       | SetGlobal { global : Global, expr : Expr }
+       | While { cond : Cond, body : Stmt? }
+  Cond = Literal { val : boolean }
+       | And { lhs : Cond, rhs : Cond }
+       | Or { lhs : Cond, rhs : Cond }
+       | Not { cond : Cond }
+       | Compare { op : string, lhs : Expr, rhs : Expr }
+  Expr = Const { val : ExprConst }
+       | GetGlobal { global : Global }
+       | BinaryOp { op : string, lhs : Expr, rhs : Expr }
+       | UnaryOp { op : string, arg : Expr }
+  extern ExprConst isExprConst
+  extern Field     isField
+  extern Function  isFunction
+  extern Global    isGlobal
+  extern Relation  isRelation
+  extern Subset    isSubset
+end
+AL.AST = AST
+
+-------------------------------------------------------------------------------
+-- API call logs
+-------------------------------------------------------------------------------
+
+local decls = terralib.newlist() -- AST.Decl*
+
+-- () -> AST.Decl*
+function AL.decls()
+  return decls
 end
 
-function APIEntry:indented_string(indent)
-  local str  = indent .. " name : " .. self.name .. "\n"
-  str = str .. indent .. " return val : " .. tostring(self.return_val) .. "\n"
-  str = str .. indent .. " args : " .. self:args_stringify()
-  return str
+local scopes = terralib.newlist({terralib.newlist()}) -- (AST.Stmt*)*
+local stack = terralib.newlist() -- (AST.If | AST.While)*
+
+-- () -> AST.Stmt*
+function AL.stmts()
+  return scopes[#scopes]
 end
 
+-------------------------------------------------------------------------------
+-- Operations on AST nodes
+-------------------------------------------------------------------------------
 
--- Log all Ebb API calls that need to be passed to Legion here
-
-local APILog = { entries = terralib.newlist() }
-
-function APILog:insert(entry)
-  self.entries:insert(entry)
+-- string, ExprConst | AST.Expr, ExprConst | AST.Expr -> AST.Expr
+local function implBinaryOp(op, lhs, rhs)
+  if isExprConst(lhs) then lhs = AST.Const(lhs) end
+  if isExprConst(rhs) then rhs = AST.Const(rhs) end
+  return AST.BinaryOp(op, lhs, rhs)
 end
 
-function APILog:print()
-  for k,v in ipairs(self.entries) do
-    print("[" .. k .. "]")
-    print(v:indented_string("   "))
-  end
+-- ExprConst | AST.Expr, ExprConst | AST.Expr -> AST.Expr
+function AST.Expr.__add(lhs, rhs) return implBinaryOp('+', lhs, rhs) end
+function AST.Expr.__sub(lhs, rhs) return implBinaryOp('-', lhs, rhs) end
+function AST.Expr.__mul(lhs, rhs) return implBinaryOp('*', lhs, rhs) end
+function AST.Expr.__div(lhs, rhs) return implBinaryOp('/', lhs, rhs) end
+function AST.Expr.__mod(lhs, rhs) return implBinaryOp('%', lhs, rhs) end
+
+-- AST.Expr -> AST.Expr
+function AST.Expr.__unm(x)
+  return AST.UnaryOp('-', x)
 end
 
-function A.RecordAPICall(call_name, args, return_val)
-  assert(type(args) == 'table')
-  local entry = NewAPIEntry(call_name, args, return_val)
-  APILog:insert(entry)
+-- boolean | AST.Cond, boolean | AST.Cond -> AST.Cond
+function AL.AND(lhs, rhs)
+  if type(lhs) == 'boolean' then lhs = AST.Literal(lhs) end
+  if type(rhs) == 'boolean' then rhs = AST.Literal(rhs) end
+  return AST.And(lhs, rhs)
 end
 
-A.log = APILog
+-- boolean | AST.Cond, boolean | AST.Cond -> AST.Cond
+function AL.OR(lhs, rhs)
+  if type(lhs) == 'boolean' then lhs = AST.Literal(lhs) end
+  if type(rhs) == 'boolean' then rhs = AST.Literal(rhs) end
+  return AST.Or(lhs, rhs)
+end
+
+-- boolean | AST.Cond -> AST.Cond
+function AL.NOT(cond)
+  if type(cond) == 'boolean' then cond = AST.Literal(cond) end
+  return AST.Not(cond)
+end
+
+-- string, ExprConst | AST.Expr, ExprConst | AST.Expr -> AST.Cond
+local function implCompare(op, lhs, rhs)
+  if isExprConst(lhs) then lhs = AST.Const(lhs) end
+  if isExprConst(rhs) then rhs = AST.Const(rhs) end
+  return AST.Compare(op, lhs, rhs)
+end
+
+-- ExprConst | AST.Expr, ExprConst | AST.Expr -> AST.Cond
+function AL.EQ(lhs, rhs) return implCompare('==', lhs, rhs) end
+function AL.NE(lhs, rhs) return implCompare('~=', lhs, rhs) end
+function AL.GT(lhs, rhs) return implCompare('>',  lhs, rhs) end
+function AL.LT(lhs, rhs) return implCompare('<',  lhs, rhs) end
+function AL.GE(lhs, rhs) return implCompare('>=', lhs, rhs) end
+function AL.LE(lhs, rhs) return implCompare('<=', lhs, rhs) end
+
+-- boolean | AST.Cond -> ()
+function AL.IF(cond)
+  if type(cond) == 'boolean' then cond = AST.Literal(cond) end
+  stack:insert(AST.If(cond, nil, nil))
+  scopes:insert(terralib.newlist())
+end
+
+-- () -> ()
+function AL.ELSE()
+  assert(#stack > 0)
+  local wrapper = stack[#stack]
+  assert(AST.If.check(wrapper))
+  assert(not wrapper.thenBlock)
+  wrapper.thenBlock = AST.Block(scopes[#scopes])
+  scopes[#scopes] = terralib.newlist()
+end
+
+-- boolean | AST.Cond -> ()
+function AL.WHILE(cond)
+  if type(cond) == 'boolean' then cond = AST.Literal(cond) end
+  stack:insert(AST.While(cond, nil))
+  scopes:insert(terralib.newlist())
+end
+
+-- () -> ()
+function AL.END()
+  assert(#stack > 0)
+  local wrapper = stack[#stack]
+  local stmts = scope[#scope]
+  if AST.If.check(wrapper) then
+    if wrapper.thenBlock then
+      assert(not wrapper.elseBlock)
+      wrapper.elseBlock = AST.Block(stmts)
+    else
+      wrapper.thenBlock = AST.Block(stmts)
+    end
+  elseif AST.While.check(wrapper) then
+    wrapper.body = AST.Block(stmts)
+  else assert(false) end
+  scopes[#scopes-1]:insert(wrapper)
+  scopes[#scopes] = nil
+  stack[#stack] = nil
+end

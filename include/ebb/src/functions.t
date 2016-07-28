@@ -64,7 +64,7 @@ function F.NewFunction(func_ast, luaenv)
     _name         = special.id,
   }, Function)
 
-  AL.RecordAPICall('NewFunction', {}, ufunc)
+  AL.decls():insert(AL.AST.NewFunction(ufunc))
 
   return ufunc
 end
@@ -241,8 +241,8 @@ function Function:_doForEach(relset, ...)
   local params      = get_func_call_params_from_args(...)
   local typeversion = self:_Get_Type_Version_Table(4, relset, ...)
   -- now we either retrieve or construct the appropriate function version
-  local version = get_ufunc_version(self, typeversion, relset, params)
-  AL.RecordAPICall('ForEachCall', {}, version)
+  local v = get_ufunc_version(self, typeversion, relset, params)
+  AL.stmts():insert(AL.AST.ForEach(v.ufunc, v.relation, v.subset))
 end
 function Function:doForEach(relset, ...)
   self:_doForEach(relset, ...)

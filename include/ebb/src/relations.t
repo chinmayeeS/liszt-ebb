@@ -170,7 +170,7 @@ function R.NewRelation(params)
     end
   end
   rawset(rel, '_logical_size',  size)
-  AL.RecordAPICall('NewRelation', params, rel)
+  AL.decls():insert(AL.AST.NewRelation(rel))
   return rel
 end
 
@@ -373,7 +373,7 @@ function Relation:_INTERNAL_NewSubsetFromRectangles(name, rectangles)
   }, Subset)
   rawset(self, name, subset)
   self._subsets:insert(subset)
-  AL.RecordAPICall('NewRectangleSubset', {self, name, rectangles}, subset)
+  AL.decls():insert(AL.AST.NewSubset(subset, rectangles))
   return subset
 end
 
@@ -481,7 +481,7 @@ function Relation:NewField (name, typ)
     typ:basetype().relation._incoming_refs[field] = 'key_field'
   end
 
-  AL.RecordAPICall('NewField', {self, name, typ}, field)
+  AL.decls():insert(AL.AST.NewField(field))
 
   return field
 end
@@ -510,5 +510,5 @@ function Field:Load(val)
   if not T.luaValConformsToType(val, self._type) then
     error('Value to be loaded does not match field type', 2)
   end
-  AL.RecordAPICall('LoadField', { self, val }, nil)
+  AL.stmts():insert(AL.AST.LoadField(self, val))
 end
