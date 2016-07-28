@@ -28,7 +28,7 @@ package.loaded["ebb.src.relations"] = R
 local Pre   = require "ebb.src.prelude"
 local T     = require "ebb.src.types"
 local F     = require "ebb.src.functions"
-local AL    = require "ebb.src.api_log"
+local M     = require "ebb.src.main"
 
 local keyT      = T.key
 
@@ -170,7 +170,7 @@ function R.NewRelation(params)
     end
   end
   rawset(rel, '_logical_size',  size)
-  AL.decls():insert(AL.AST.NewRelation(rel))
+  M.decls():insert(M.AST.NewRelation(rel))
   return rel
 end
 
@@ -373,7 +373,7 @@ function Relation:_INTERNAL_NewSubsetFromRectangles(name, rectangles)
   }, Subset)
   rawset(self, name, subset)
   self._subsets:insert(subset)
-  AL.decls():insert(AL.AST.NewSubset(subset, rectangles))
+  M.decls():insert(M.AST.NewSubset(subset, rectangles))
   return subset
 end
 
@@ -481,7 +481,7 @@ function Relation:NewField (name, typ)
     typ:basetype().relation._incoming_refs[field] = 'key_field'
   end
 
-  AL.decls():insert(AL.AST.NewField(field))
+  M.decls():insert(M.AST.NewField(field))
 
   return field
 end
@@ -510,5 +510,5 @@ function Field:Load(val)
   if not T.luaValConformsToType(val, self._type) then
     error('Value to be loaded does not match field type', 2)
   end
-  AL.stmts():insert(AL.AST.LoadField(self, val))
+  M.stmts():insert(M.AST.LoadField(self, val))
 end

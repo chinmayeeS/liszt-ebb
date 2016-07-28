@@ -31,8 +31,7 @@ local AST = require 'ebb.src.ast'
 local C   = require 'ebb.src.c'
 local F   = require 'ebb.src.functions'
 local L   = require 'ebblib'
-local AL  = require 'ebb.src.api_log'
-local API = AL.AST
+local M   = require 'ebb.src.main'
 local P   = require 'ebb.src.phase'
 local R   = require 'ebb.src.relations'
 local RG  = regentlib
@@ -154,7 +153,7 @@ local function toRType(ltype)
   else assert(false) end
 end
 
--- AL.ExprConst, terralib.type? -> RG.rexpr
+-- M.ExprConst, terralib.type? -> RG.rexpr
 local function toRConst(lit, typ)
   if type(lit) == 'boolean' then
     assert(not typ or typ == boolean)
@@ -696,15 +695,15 @@ end
 -------------------------------------------------------------------------------
 
 -- ProgramContext -> RG.rquote
-function API.Stmt:toRQuote(ctxt)
+function M.AST.Stmt:toRQuote(ctxt)
   error('Abstract method')
 end
-function API.Block:toRQuote(ctxt)
+function M.AST.Block:toRQuote(ctxt)
   return rquote
     [self.stmts:map(function(s) return s:toRQuote(ctxt) end)]
   end
 end
-function API.ForEach:toRQuote(ctxt)
+function M.AST.ForEach:toRQuote(ctxt)
   local tsk = ctxt.fun2task[self.fun]
   local info = ctxt.funInfo[self.fun]
   local univArg = ctxt.relMap[self.rel]
@@ -727,7 +726,7 @@ function API.ForEach:toRQuote(ctxt)
   end
   return callQuote
 end
-function API.If:toRQuote(ctxt)
+function M.AST.If:toRQuote(ctxt)
   if self.elseBlock then
     return rquote
       if [self.cond:toRExpr(ctxt)] then
@@ -744,19 +743,19 @@ function API.If:toRQuote(ctxt)
     end
   end
 end
-function API.LoadField:toRQuote(ctxt)
+function M.AST.LoadField:toRQuote(ctxt)
   local relSym = ctxt.relMap[self.fld:Relation()]
   local valTyp = toRType(self.fld:Type())
   return rquote
     fill(relSym.[self.fld:Name()], [toRConst(self.val, valTyp)])
   end
 end
-function API.SetGlobal:toRQuote(ctxt)
+function M.AST.SetGlobal:toRQuote(ctxt)
   return rquote
     [ctxt.globalMap[self.global]] = [self.expr:toRExpr(ctxt)]
   end
 end
-function API.While:toRQuote(ctxt)
+function M.AST.While:toRQuote(ctxt)
   return rquote
     while [self.cond:toRExpr(ctxt)] do
       [self.body:toRQuote(ctxt)]
@@ -765,22 +764,22 @@ function API.While:toRQuote(ctxt)
 end
 
 -- ProgramContext -> RG.rexpr
-function API.Cond:toRExpr(ctxt)
+function M.AST.Cond:toRExpr(ctxt)
   error('Abstract method')
 end
-function API.Literal:toRExpr(ctxt)
+function M.AST.Literal:toRExpr(ctxt)
   return rexpr [self.val] end
 end
-function API.And:toRExpr(ctxt)
+function M.AST.And:toRExpr(ctxt)
   return rexpr [self.lhs:toRExpr(ctxt)] and [self.rhs:toRExpr(ctxt)] end
 end
-function API.Or:toRExpr(ctxt)
+function M.AST.Or:toRExpr(ctxt)
   return rexpr [self.lhs:toRExpr(ctxt)] or [self.rhs:toRExpr(ctxt)] end
 end
-function API.Not:toRExpr(ctxt)
+function M.AST.Not:toRExpr(ctxt)
   return rexpr not [self.cond:toRExpr(ctxt)] end
 end
-function API.Compare:toRExpr(ctxt)
+function M.AST.Compare:toRExpr(ctxt)
   local a = self.lhs:toRExpr(ctxt)
   local b = self.rhs:toRExpr(ctxt)
   return
@@ -794,16 +793,16 @@ function API.Compare:toRExpr(ctxt)
 end
 
 -- ProgramContext -> RG.rexpr
-function API.Expr:toRExpr(ctxt)
+function M.AST.Expr:toRExpr(ctxt)
   error('Abstract method')
 end
-function API.Const:toRExpr(ctxt)
+function M.AST.Const:toRExpr(ctxt)
   return rexpr [toRConst(self.val)] end
 end
-function API.GetGlobal:toRExpr(ctxt)
+function M.AST.GetGlobal:toRExpr(ctxt)
   return rexpr [assert(ctxt.globalMap[self.global])] end
 end
-function API.BinaryOp:toRExpr(ctxt)
+function M.AST.BinaryOp:toRExpr(ctxt)
   local a = self.lhs:toRExpr(ctxt)
   local b = self.rhs:toRExpr(ctxt)
   return
@@ -814,7 +813,7 @@ function API.BinaryOp:toRExpr(ctxt)
     (self.op == '%') and rexpr a % b end or
     assert(false)
 end
-function API.UnaryOp:toRExpr(ctxt)
+function M.AST.UnaryOp:toRExpr(ctxt)
   local a = self.arg:toRExpr(ctxt)
   return
     (self.op == '-') and rexpr -a end or
@@ -831,22 +830,22 @@ function A.translateAndRun()
     funInfo   = {}, -- map(F.Function, Context)
   }
   -- Collect declarations
-  local globalInits = {} -- map(L.Global, AL.ExprConst)
+  local globalInits = {} -- map(L.Global, M.ExprConst)
   local rels = terralib.newlist() -- R.Relation*
   local funs = terralib.newlist() -- F.Function*
   local subsetDefs = {} -- map(R.Subset, (int[1-3][2])*)
-  for _,decl in ipairs(AL.decls()) do
-    if API.NewField.check(decl) then
+  for _,decl in ipairs(M.decls()) do
+    if M.AST.NewField.check(decl) then
       -- Do nothing
-    elseif API.NewFunction.check(decl) then
+    elseif M.AST.NewFunction.check(decl) then
       if decl.fun:isKernel() then
         funs:insert(decl.fun)
       end
-    elseif API.NewGlobal.check(decl) then
+    elseif M.AST.NewGlobal.check(decl) then
       globalInits[decl.global] = decl.init
-    elseif API.NewRelation.check(decl) then
+    elseif M.AST.NewRelation.check(decl) then
       rels:insert(decl.rel)
-    elseif API.NewSubset.check(decl) then
+    elseif M.AST.NewSubset.check(decl) then
       subsetDefs[decl.subset] = decl.rectangles
     else assert(false) end
   end
@@ -905,7 +904,7 @@ function A.translateAndRun()
     ctxt.fun2task[f], ctxt.funInfo[f] = f:toTask()
   end
   -- Process statements
-  for _,s in ipairs(AL.stmts()) do
+  for _,s in ipairs(M.stmts()) do
     stmts:insert(s:toRQuote(ctxt))
   end
   -- Synthesize main task

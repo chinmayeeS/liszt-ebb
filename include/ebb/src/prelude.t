@@ -35,7 +35,7 @@
 
 local Pre = {}
 package.loaded["ebb.src.prelude"] = Pre
-local AL    = require "ebb.src.api_log"
+local M = require "ebb.src.main"
 
 -------------------------------------------------------------------------------
 
@@ -73,7 +73,7 @@ function Pre.Global (typ, init)
   end
 
   local s  = setmetatable({_type=typ}, Global)
-  AL.decls():insert(AL.AST.NewGlobal(s, init))
+  M.decls():insert(M.AST.NewGlobal(s, init))
   return s
 end
 
@@ -82,19 +82,19 @@ function Global:__newindex(fieldname,value)
 end
 
 function Global:set(val)
-  if AL.isExprConst(val) then
+  if M.isExprConst(val) then
     -- Lift lua constant to AST node.
     if not T.luaValConformsToType(val, self._type) then
       error("value does not conform to type of global: "..
               tostring(self._type), 2)
     end
-    val = AL.AST.Const(val)
+    val = M.AST.Const(val)
   end
-  AL.stmts():insert(AL.AST.SetGlobal(self, val))
+  M.stmts():insert(M.AST.SetGlobal(self, val))
 end
 
 function Global:get()
-  return AL.AST.GetGlobal(self)
+  return M.AST.GetGlobal(self)
 end
 
 function Global:Type()

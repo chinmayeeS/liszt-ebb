@@ -33,7 +33,7 @@ local specialization    = require 'ebb.src.specialization'
 local semant            = require 'ebb.src.semant'
 local phase             = require 'ebb.src.phase'
 local stencil           = require 'ebb.src.stencil'
-local AL                = require "ebb.src.api_log"
+local M                 = require "ebb.src.main"
 
 local function shallowcopy_table(tbl)
   local x = {}
@@ -64,7 +64,7 @@ function F.NewFunction(func_ast, luaenv)
     _name         = special.id,
   }, Function)
 
-  AL.decls():insert(AL.AST.NewFunction(ufunc))
+  M.decls():insert(M.AST.NewFunction(ufunc))
 
   return ufunc
 end
@@ -242,7 +242,7 @@ function Function:_doForEach(relset, ...)
   local typeversion = self:_Get_Type_Version_Table(4, relset, ...)
   -- now we either retrieve or construct the appropriate function version
   local v = get_ufunc_version(self, typeversion, relset, params)
-  AL.stmts():insert(AL.AST.ForEach(v.ufunc, v.relation, v.subset))
+  M.stmts():insert(M.AST.ForEach(v.ufunc, v.relation, v.subset))
 end
 function Function:doForEach(relset, ...)
   self:_doForEach(relset, ...)

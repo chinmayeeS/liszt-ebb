@@ -23,8 +23,8 @@
 
 import 'ebb.src.adt'
 
-local AL = {}
-package.loaded['ebb.src.api_log'] = AL
+local M = {}
+package.loaded['ebb.src.main'] = M
 
 local L = require 'ebblib'
 local isField    = function(x) return L.is_field(x) end
@@ -54,7 +54,7 @@ local function isExprConst(x)
   end
   return true
 end
-AL.isExprConst = isExprConst
+M.isExprConst = isExprConst
 
 local ADT AST
   Decl = NewField { fld : Field }
@@ -84,7 +84,7 @@ local ADT AST
   extern Relation  isRelation
   extern Subset    isSubset
 end
-AL.AST = AST
+M.AST = AST
 
 -------------------------------------------------------------------------------
 -- API call logs
@@ -93,7 +93,7 @@ AL.AST = AST
 local decls = terralib.newlist() -- AST.Decl*
 
 -- () -> AST.Decl*
-function AL.decls()
+function M.decls()
   return decls
 end
 
@@ -101,7 +101,7 @@ local scopes = terralib.newlist({terralib.newlist()}) -- (AST.Stmt*)*
 local stack = terralib.newlist() -- (AST.If | AST.While)*
 
 -- () -> AST.Stmt*
-function AL.stmts()
+function M.stmts()
   return scopes[#scopes]
 end
 
@@ -129,21 +129,21 @@ function AST.Expr.__unm(x)
 end
 
 -- boolean | AST.Cond, boolean | AST.Cond -> AST.Cond
-function AL.AND(lhs, rhs)
+function M.AND(lhs, rhs)
   if type(lhs) == 'boolean' then lhs = AST.Literal(lhs) end
   if type(rhs) == 'boolean' then rhs = AST.Literal(rhs) end
   return AST.And(lhs, rhs)
 end
 
 -- boolean | AST.Cond, boolean | AST.Cond -> AST.Cond
-function AL.OR(lhs, rhs)
+function M.OR(lhs, rhs)
   if type(lhs) == 'boolean' then lhs = AST.Literal(lhs) end
   if type(rhs) == 'boolean' then rhs = AST.Literal(rhs) end
   return AST.Or(lhs, rhs)
 end
 
 -- boolean | AST.Cond -> AST.Cond
-function AL.NOT(cond)
+function M.NOT(cond)
   if type(cond) == 'boolean' then cond = AST.Literal(cond) end
   return AST.Not(cond)
 end
@@ -156,22 +156,22 @@ local function implCompare(op, lhs, rhs)
 end
 
 -- ExprConst | AST.Expr, ExprConst | AST.Expr -> AST.Cond
-function AL.EQ(lhs, rhs) return implCompare('==', lhs, rhs) end
-function AL.NE(lhs, rhs) return implCompare('~=', lhs, rhs) end
-function AL.GT(lhs, rhs) return implCompare('>',  lhs, rhs) end
-function AL.LT(lhs, rhs) return implCompare('<',  lhs, rhs) end
-function AL.GE(lhs, rhs) return implCompare('>=', lhs, rhs) end
-function AL.LE(lhs, rhs) return implCompare('<=', lhs, rhs) end
+function M.EQ(lhs, rhs) return implCompare('==', lhs, rhs) end
+function M.NE(lhs, rhs) return implCompare('~=', lhs, rhs) end
+function M.GT(lhs, rhs) return implCompare('>',  lhs, rhs) end
+function M.LT(lhs, rhs) return implCompare('<',  lhs, rhs) end
+function M.GE(lhs, rhs) return implCompare('>=', lhs, rhs) end
+function M.LE(lhs, rhs) return implCompare('<=', lhs, rhs) end
 
 -- boolean | AST.Cond -> ()
-function AL.IF(cond)
+function M.IF(cond)
   if type(cond) == 'boolean' then cond = AST.Literal(cond) end
   stack:insert(AST.If(cond, nil, nil))
   scopes:insert(terralib.newlist())
 end
 
 -- () -> ()
-function AL.ELSE()
+function M.ELSE()
   assert(#stack > 0)
   local wrapper = stack[#stack]
   assert(AST.If.check(wrapper))
@@ -181,14 +181,14 @@ function AL.ELSE()
 end
 
 -- boolean | AST.Cond -> ()
-function AL.WHILE(cond)
+function M.WHILE(cond)
   if type(cond) == 'boolean' then cond = AST.Literal(cond) end
   stack:insert(AST.While(cond, nil))
   scopes:insert(terralib.newlist())
 end
 
 -- () -> ()
-function AL.END()
+function M.END()
   assert(#stack > 0)
   local wrapper = stack[#stack]
   local stmts = scope[#scope]
