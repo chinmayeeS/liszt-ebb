@@ -134,18 +134,52 @@ end
 
 -- T:terralib.type, N:int -> (T[N], T[N] -> T)
 local emitDotProduct = terralib.memoize(function(T, N)
-  local terra dot(a:T[N], b:T[N])
-    escape
-      if N == 1 then
-        emit quote return a[0] * b[0] end
-      elseif N == 2 then
-        emit quote return a[0] * b[0] + a[1] * b[1] end
-      elseif N == 3 then
-        emit quote return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] end
-      else assert(false) end
-    end
+  local a = symbol(T[N], 'a')
+  local b = symbol(T[N], 'b')
+  local elems = terralib.newlist()
+  local expr = `0
+  for i=0,N-1 do
+    expr = `expr+(a[i]*b[i])
+  end
+  local terra dot([a], [b]) : T
+    return [expr]
   end
   return dot
+end)
+
+-- string, T:terralib.type, N:int -> (T[N], T -> T[N])
+local emitVectorVectorOp = terralib.memoize(function(op, T, N)
+  local a = symbol(T[N], 'a')
+  local b = symbol(T[N], 'b')
+  local elems = terralib.newlist()
+  for i=0,N-1 do
+    elems:insert((op == '+') and (`a[i] + b[i]) or
+                 (op == '-') and (`a[i] - b[i]) or
+                 assert(false))
+  end
+  local terra vvop([a], [b]) : T[N]
+    return array([elems])
+  end
+  return vvop
+end)
+
+-- string, T:terralib.type, N:int -> (T[N], T -> T[N])
+local emitVectorScalarOp = terralib.memoize(function(op, T, N)
+  local a = symbol(T[N], 'a')
+  local b = symbol(T, 'b')
+  local elems = terralib.newlist()
+  for i=0,N-1 do
+    elems:insert((op == '+') and (`a[i] + b) or
+                 (op == '-') and (`a[i] - b) or
+                 (op == '*') and (`a[i] * b) or
+                 (op == '/') and (`a[i] / b) or
+                 (op == '%') and (`a[i] % b) or
+                 assert(false))
+  end
+  local terra vsop([a], [b]) : T[N]
+    return array([elems])
+  end
+  return vsop
 end)
 
 -- RG.rexpr* -> RG.rexpr
@@ -405,7 +439,7 @@ function FunContext.New(info, argNames, argTypes)
       assert(not self.reducedGlobal)
       self.reducedGlobal = g
       self.globalReduceAcc = RG.newsymbol(toRType(g:Type()), 'acc')
-      self.globalReduceOp = op
+      self.globalReduceOp = pt.reduceop
     else assert(false) end
   end
   return self
@@ -612,6 +646,23 @@ function AST.BinaryOp:toRExpr(ctxt)
   -- self.op  : string
   local a = self.lhs:toRExpr(ctxt)
   local b = self.rhs:toRExpr(ctxt)
+  local t1 = self.lhs.node_type
+  local t2 = self.rhs.node_type
+  -- TODO: Not handling matrix operations
+  if t1:isvector() and t2:isvector() then
+    local fun = emitVectorVectorOp(self.op, toRType(t1.type), t1.N)
+    if DEBUG then fun:printpretty(false) end
+    return rexpr fun(a, b) end
+  elseif t1:isvector() and t2:isscalar() then
+    local fun = emitVectorScalarOp(self.op, toRType(t2), t1.N)
+    if DEBUG then fun:printpretty(false) end
+    return rexpr fun(a, b) end
+  elseif t1:isscalar() and t2:isvector() and self.op == '*' then
+    local fun = emitVectorScalarOp(self.op, toRType(t1), t2.N)
+    if DEBUG then fun:printpretty(false) end
+    return rexpr fun(b, a) end
+  end
+  assert(t1:isscalar() and t2:isscalar())
   return
     (self.op == '==')  and rexpr a == b  end or
     (self.op == '~=')  and rexpr a ~= b  end or
@@ -724,7 +775,7 @@ function AST.Call:toRExpr(ctxt)
     local t2 = self.params[2].node_type
     assert(t1:isvector() and t2:isvector() and t1.N == t2.N)
     local fun = emitDotProduct(toRType(t1.type), t1.N)
-    if DEBUG then fun:printpretty() end
+    if DEBUG then fun:printpretty(false) end
     local arg1 = self.params[1]:toRExpr(ctxt)
     local arg2 = self.params[2]:toRExpr(ctxt)
     return rexpr fun([arg1], [arg2]) end
