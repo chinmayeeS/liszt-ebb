@@ -481,7 +481,7 @@ function AST.UserFunction:toTask(info)
     local univ = ctxt.relMap[ctxt.domainRel]
     assert(dom == args[1] and univ == args[2])
     local _, rest = split(args, univ)
-    local st __demand(__parallel) task st([dom], [univ], [rest]) where
+    local task st([dom], [univ], [rest]) where
       dom <= univ,
       reads      (univ.[ctxt.readCols]),
       writes     (univ.[ctxt.writeCols]),
@@ -876,9 +876,6 @@ function AST.DoStatement:toRQuote(ctxt)
   -- self.body        : AST.Block
   -- self.orig_func   : F.Function?
   -- self.orig_params : (AST.Expression*)?
-  if self.orig_func then
-    return rquote [recoverHelperCall(self, ctxt)] end
-  end
   return self.body:toRQuote(ctxt)
 end
 function AST.ExprStatement:toRQuote(ctxt)
