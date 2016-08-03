@@ -1440,7 +1440,10 @@ function ast.Call:check(ctxt)
     -- replace the call node with the inlined AST
     call = RunMacro(ctxt, self, v, call.params)
   elseif v and F.is_function(v) then
+    local orig_params = call.params
     call = InlineUserFunc(ctxt, self, v, call.params)
+    call.orig_func = v
+    call.orig_params = orig_params
   elseif v and T.istype(v) and v:isvalue() then
     local params = call.params
     if #params ~= 1 then
@@ -1611,6 +1614,27 @@ function S.check(some_ast)
   env:leaveblock()
   diag:finishandabortiferrors("Errors during typechecking ebb", 1)
   return typed_ast
+end
+
+function S.check_helper_func(func, param_types, caller_dom)
+  local f = func._decl_ast:alpha_rename()
+  local env = terralib.newenvironment()
+  local diag = terralib.newdiagnostics()
+  local ctxt = Context.new(env, diag)
+  assert(#f.params == #param_types)
+  for i=1,#f.params do
+    local pname = f.params[i]
+    local ptype = param_types[i]
+    ctxt:ebb()[pname] = ptype
+  end
+  -- Piggyback on caller's priviledges
+  if param_types[1]:iskey() and param_types[1].relation == caller_dom then
+     ctxt:recordcenter(f.params[1])
+  end
+  f.body = f.body:check(ctxt)
+  f.exp = f.exp and f.exp:check(ctxt)
+  diag:finishandabortiferrors("Errors during typechecking ebb", 1)
+  return f
 end
 
 function S.check_quote(quote_ast)

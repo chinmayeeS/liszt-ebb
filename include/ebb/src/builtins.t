@@ -458,7 +458,7 @@ B.log   = Builtin.newDoubleFunction('log')
 
 B.fmin  = Builtin.new()
 B.fmax  = Builtin.new()
-local function minmax_check(ast, ctxt, name)
+local function fminmax_check(ast, ctxt, name)
     if #ast.params ~= 2 then
         ctxt:error(ast, name.." expects 2 arguments "..
                         "(instead got ".. #ast.params ..")")
@@ -476,8 +476,31 @@ local function minmax_check(ast, ctxt, name)
     end
     return doubleT
 end
-function B.fmin.check(ast, ctxt) return minmax_check(ast, ctxt, 'fmin') end
-function B.fmax.check(ast, ctxt) return minmax_check(ast, ctxt, 'fmax') end
+function B.fmin.check(ast, ctxt) return fminmax_check(ast, ctxt, 'fmin') end
+function B.fmax.check(ast, ctxt) return fminmax_check(ast, ctxt, 'fmax') end
+
+B.imin  = Builtin.new()
+B.imax  = Builtin.new()
+local function iminmax_check(ast, ctxt, name)
+    if #ast.params ~= 2 then
+        ctxt:error(ast, name.." expects 2 arguments "..
+                        "(instead got ".. #ast.params ..")")
+        return errorT
+    end
+    local lt = ast.params[1].node_type
+    local rt = ast.params[1].node_type
+    if not lt == intT then
+        ctxt:error(ast.params[1], "argument to "..name..
+                                  " must be an int")
+    end
+    if not rt == intT then
+        ctxt:error(ast.params[2], "argument to "..name..
+                                  " must be an int")
+    end
+    return intT
+end
+function B.imin.check(ast, ctxt) return iminmax_check(ast, ctxt, 'imin') end
+function B.imax.check(ast, ctxt) return iminmax_check(ast, ctxt, 'imax') end
 
 B.pow = Builtin.new(C.pow)
 function B.pow.check (ast, ctxt)

@@ -32,20 +32,10 @@ local int_floor = L.Macro(function(v)
   return ebb ` L.int(L.floor(v))
 end)
 local max_impl = L.Macro(function(a,b)
-  return ebb quote
-    var ret = a
-    if b > a then ret = b end
-  in
-    ret
-  end
+  return ebb ` L.imax(a, b)
 end)
 local min_impl = L.Macro(function(a,b)
-  return ebb quote
-    var ret = a
-    if b < a then ret = b end
-  in
-    ret
-  end
+  return ebb ` L.imin(a, b)
 end)
 
 local clamp_impl = L.Macro(function(x, lower, upper)
@@ -141,7 +131,7 @@ local function setup2dCells(grid)
                                 { yn_bd, Cy-yn_bd-1 } })
 
   cells:NewFieldReadFunction('center', ebb (c)
-    return L.vec2f({ xo + xw * (L.double(L.xid(c)) + 0.5),
+    return L.vec2d({ xo + xw * (L.double(L.xid(c)) + 0.5),
                      yo + yw * (L.double(L.yid(c)) + 0.5) })  end)
 
   -- hide this unsafe macro behind a bulk call below
@@ -208,7 +198,7 @@ local function setup2dDualCells(grid)
 
   if not xp and not yp then
     dcells:NewFieldReadFunction('center', ebb(dc)
-      return L.vec2f({ xo + xw * (L.double(L.xid(dc))),
+      return L.vec2d({ xo + xw * (L.double(L.xid(dc))),
                        yo + yw * (L.double(L.yid(dc))) })  end)
   end
 
@@ -567,7 +557,7 @@ local function setup3dCells(grid)
                                 { zn_bd, Cz-zn_bd-1 } })
 
   cells:NewFieldReadFunction('center', ebb(c)
-    return L.vec3f({ xo + xw * (L.double(L.xid(c)) + 0.5),
+    return L.vec3d({ xo + xw * (L.double(L.xid(c)) + 0.5),
                      yo + yw * (L.double(L.yid(c)) + 0.5),
                      zo + zw * (L.double(L.zid(c)) + 0.5) })  end)
 
@@ -648,7 +638,7 @@ local function setup3dDualCells(grid)
 
   if not xp and not yp and not zp then
     dcells:NewFieldReadFunction('center', ebb(dc)
-      return L.vec3f({ xo + xw * (L.double(L.xid(dc))),
+      return L.vec3d({ xo + xw * (L.double(L.xid(dc))),
                        yo + yw * (L.double(L.yid(dc))),
                        zo + zw * (L.double(L.zid(dc))) })  end)
   end

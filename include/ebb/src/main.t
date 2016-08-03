@@ -191,7 +191,7 @@ end
 function M.END()
   assert(#stack > 0)
   local wrapper = stack[#stack]
-  local stmts = scope[#scope]
+  local stmts = scopes[#scopes]
   if AST.If.check(wrapper) then
     if wrapper.thenBlock then
       assert(not wrapper.elseBlock)
