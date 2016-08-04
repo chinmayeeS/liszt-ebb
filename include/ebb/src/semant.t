@@ -1616,7 +1616,7 @@ function S.check(some_ast)
   return typed_ast
 end
 
-function S.check_helper_func(func, param_types, caller_dom)
+function S.check_helper_func(func, param_types)
   local f = func._decl_ast:alpha_rename()
   local env = terralib.newenvironment()
   local diag = terralib.newdiagnostics()
@@ -1626,10 +1626,6 @@ function S.check_helper_func(func, param_types, caller_dom)
     local pname = f.params[i]
     local ptype = param_types[i]
     ctxt:ebb()[pname] = ptype
-  end
-  -- Piggyback on caller's priviledges
-  if param_types[1]:iskey() and param_types[1].relation == caller_dom then
-     ctxt:recordcenter(f.params[1])
   end
   f.body = f.body:check(ctxt)
   f.exp = f.exp and f.exp:check(ctxt)

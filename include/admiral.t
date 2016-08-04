@@ -115,23 +115,6 @@ local function opIdentity(op, typ)
     assert(false)
 end
 
--- T*, T -> T*, T*
-local function split(list, at)
-  local head = terralib.newlist()
-  local tail = terralib.newlist()
-  local found = false
-  for _,x in ipairs(list) do
-    if found then
-      tail:insert(x)
-    elseif x == at then
-      found = true
-    else
-      head:insert(x)
-    end
-  end
-  return head, tail
-end
-
 -- T:terralib.type, N:int -> (T[N], T[N] -> T)
 local emitDotProduct = terralib.memoize(function(T, N)
   local a = symbol(T[N], 'a')
@@ -354,7 +337,7 @@ end
 
 -- FunInfo = {
 --   name           : string
---   domainRel      : R.Relation
+--   domainRel      : R.Relation?
 --   field_use      : map(R.Field, P.PhaseType)
 --   global_use     : map(L.Global, P.PhaseType)
 -- }
@@ -401,7 +384,13 @@ function FunContext.New(info, argNames, argTypes)
   end
   -- Process arguments
   for i,lsym in ipairs(argNames) do
-    local rsym = RG.newsymbol(tostring(lsym), toRType(argTypes[i]))
+    local rtype
+    if i > 1 or not info.domainRel then
+      -- If this is a kernel, leave the first argument untyped (it will be used
+      -- as the loop variable, and not included in the signature).
+      rtype = toRType(argTypes[i])
+    end
+    local rsym = RG.newsymbol(rtype, tostring(lsym))
     self.args:insert(rsym)
     self.localMap[lsym] = rexpr rsym end
   end
@@ -433,7 +422,7 @@ function FunContext.New(info, argNames, argTypes)
   for g,pt in pairs(info.global_use) do
     if pt.read and not pt.reduceop then
       assert(not self.globalMap[g])
-      self.globalMap[g] = RG.newsymbol(toRType(g:Type()))
+      self.globalMap[g] = RG.newsymbol(toRType(g:Type()), nil)
       self.readGlobals:insert(g)
     elseif pt.reduceop and not pt.read then
       assert(not self.reducedGlobal)
@@ -448,7 +437,7 @@ end
 -- AST.Symbol -> RG.symbol
 function FunContext:addLocal(lsym)
   assert(not self.localMap[lsym])
-  local rsym = RG.newsymbol(tostring(lsym))
+  local rsym = RG.newsymbol(nil, tostring(lsym))
   self.localMap[lsym] = rexpr rsym end
   return rsym
 end
@@ -507,15 +496,11 @@ function AST.UserFunction:toTask(info)
     body:insert(rquote return [self.exp:toRExpr(ctxt)] end)
   end
   -- Synthesize task
-  -- TODO: Remove hacks from this part, once Regent bugs are fixed.
   local tsk
-  local args = ctxt:signature()
   if info.domainRel then
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
-    assert(dom == args[1] and univ == args[2])
-    local _, rest = split(args, univ)
-    local task st([dom], [univ], [rest]) where
+    local task st([ctxt:signature()]) where
       dom <= univ,
       reads      (univ.[ctxt.readCols]),
       writes     (univ.[ctxt.writeCols]),
@@ -529,8 +514,7 @@ function AST.UserFunction:toTask(info)
     tsk = st
   elseif #ctxt.accessedRels > 0 then
     local univ = ctxt.relMap[ctxt.accessedRels[1]]
-    local _, rest = split(args, univ)
-    local task st([univ], [rest]) where
+    local task st([ctxt:signature()]) where
       reads      (univ.[ctxt.readCols]),
       writes     (univ.[ctxt.writeCols]),
       reduces +  (univ.[ctxt.plusRdCols]),
@@ -542,7 +526,7 @@ function AST.UserFunction:toTask(info)
     do [body] end
     tsk = st
   else
-    local task st([args]) [body] end
+    local task st([ctxt:signature()]) end
     tsk = st
   end
   -- Finalize task
@@ -589,10 +573,7 @@ function F.Function:toHelperTask(argTypes, callerDom)
   if toHelperTask_cache[self] then
     return unpack(toHelperTask_cache[self])
   end
-  -- If the caller has centered access to a relation, the helper can use it.
-  -- TODO: This is not necessarily true for all the calls to this helper,
-  -- i.e. this information should be included in the caching scheme.
-  local typedAST = S.check_helper_func(self, argTypes, callerDom)
+  local typedAST = S.check_helper_func(self, argTypes)
   local info = P.phasePass(typedAST)
   -- info : {
   --   ...
@@ -880,7 +861,14 @@ end
 function AST.UnaryOp:toRExpr(ctxt)
   -- self.exp : AST.Expression
   -- self.op  : string
+  -- TODO: Not handling matrix operations
+  local t = self.exp.node_type
   local arg = self.exp:toRExpr(ctxt)
+  if t:isvector() and self.op == '-' then
+    local fun = emitVectorScalarOp('*', toRType(t.type), t.N)
+    return rexpr fun(arg, -1) end
+  end
+  assert(t:isscalar())
   return
     (self.op == '-')   and rexpr -arg    end or
     (self.op == 'not') and rexpr not arg end or
@@ -902,11 +890,30 @@ function AST.Statement:toRQuote(ctxt)
   error('Abstract Method')
 end
 function AST.Assignment:toRQuote(ctxt)
-  -- self.lvalue : AST.Expression
-  -- self.exp    : AST.Expression
-  return rquote
-    [self.lvalue:toRExpr(ctxt)] = [self.exp:toRExpr(ctxt)]
+  -- self.lvalue   : AST.Expression
+  -- self.exp      : AST.Expression
+  -- self.reduceop : string?
+  if self.reduceop and not self.lvalue.node_type:isscalar() then
+    local opNode = AST.BinaryOp:DeriveFrom(self)
+    opNode.lhs = self.lvalue
+    opNode.op = self.reduceop
+    opNode.rhs = self.exp
+    local asgnNode = AST.Assignment:DeriveFrom(self)
+    asgnNode.lvalue = self.lvalue
+    asgnNode.exp = opNode
+    return asgnNode:toRQuote(ctxt)
   end
+  local a = self.lvalue:toRExpr(ctxt)
+  local b = self.exp:toRExpr(ctxt)
+  return
+    (not self.reduceop)      and rquote a = b    end or
+    (self.reduceop == '+')   and rquote a += b   end or
+    (self.reduceop == '-')   and rquote a -= b   end or
+    (self.reduceop == '*')   and rquote a *= b   end or
+    (self.reduceop == '/')   and rquote a /= b   end or
+    (self.reduceop == 'max') and rquote a max= b end or
+    (self.reduceop == 'min') and rquote a min= b end or
+    assert(false)
 end
 function AST.Break:toRQuote(ctxt)
   quit(self)
@@ -939,9 +946,18 @@ end
 function AST.FieldWrite:toRQuote(ctxt)
   -- self.fieldaccess : AST.FieldAccess
   -- self.exp         : AST.Expression
-  return rquote
-    [self.fieldaccess:toRExpr(ctxt)] = [self.exp:toRExpr(ctxt)]
-  end
+  -- self.reduceop    : string?
+  local a = self.fieldaccess:toRExpr(ctxt)
+  local b = self.exp:toRExpr(ctxt)
+  return
+    (not self.reduceop)      and rquote a = b    end or
+    (self.reduceop == '+')   and rquote a += b   end or
+    (self.reduceop == '-')   and rquote a -= b   end or
+    (self.reduceop == '*')   and rquote a *= b   end or
+    (self.reduceop == '/')   and rquote a /= b   end or
+    (self.reduceop == 'max') and rquote a max= b end or
+    (self.reduceop == 'min') and rquote a min= b end or
+    assert(false)
 end
 function AST.GenericFor:toRQuote(ctxt)
   quit(self)
@@ -1177,13 +1193,13 @@ function A.translateAndRun()
   -- Emit global declarations
   for g,val in pairs(globalInits) do
     local typ = toRType(g:Type())
-    local x = RG.newsymbol(typ)
+    local x = RG.newsymbol(typ, nil)
     ctxt.globalMap[g] = x
     stmts:insert(rquote var [x] = [toRConst(val, typ)] end)
   end
   -- Emit region declarations
   for _,rel in ipairs(rels) do
-    local rg = RG.newsymbol(rel:Name())
+    local rg = RG.newsymbol(nil, rel:Name())
     ctxt.relMap[rel] = rg
     stmts:insert(rquote
       var [rg] = [rel:mkRegionInit()]
@@ -1196,7 +1212,7 @@ function A.translateAndRun()
       print('WARNING: Skipping multi-rect subset '..subset:FullName())
     else
       local rg = ctxt.relMap[rel]
-      local subrg = RG.newsymbol(rel:Name()..'_'..subset:Name())
+      local subrg = RG.newsymbol(nil, rel:Name()..'_'..subset:Name())
       ctxt.subsetMap[subset] = subrg
       local rect = rects[1]
       local rectExpr =
