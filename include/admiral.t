@@ -490,7 +490,7 @@ function FunContext.New(info, argNames, argTypes)
   for g,pt in pairs(info.global_use) do
     if pt.read and not pt.reduceop then
       assert(not self.globalMap[g])
-      self.globalMap[g] = RG.newsymbol(toRType(g:Type()), nil)
+      self.globalMap[g] = RG.newsymbol(toRType(g:Type()), g:Name())
       self.readGlobals:insert(g)
     elseif pt.reduceop and not pt.read then
       assert(not self.reducedGlobal)
@@ -1240,7 +1240,7 @@ function A.translateAndRun()
   end
   -- Emit global declarations
   for g,val in pairs(globalInits) do
-    local x = RG.newsymbol(toRType(g:Type()), nil)
+    local x = RG.newsymbol(toRType(g:Type()), g:Name())
     ctxt.globalMap[g] = x
     stmts:insert(rquote var [x] = [toRConst(val, g:Type())] end)
   end

@@ -63,16 +63,16 @@ local T   = require 'ebb.src.types'
 --[[ Globals:                                                              ]]--
 -------------------------------------------------------------------------------
 
-function Pre.Global (typ, init)
+function Pre.Global (name, typ, init)
   if not T.istype(typ) or not typ:isvalue() then
-    error("First argument to Global() must be an Ebb value type", 2)
+    error("Second argument to Global() must be an Ebb value type", 2)
   end
   if not T.luaValConformsToType(init, typ) then
-    error("Second argument to Global() must be an "..
+    error("Third argument to Global() must be an "..
           "instance of type " .. tostring(typ), 2)
   end
 
-  local s  = setmetatable({_type=typ}, Global)
+  local s  = setmetatable({_name=name, _type=typ}, Global)
   M.decls():insert(M.AST.NewGlobal(s, init))
   return s
 end
@@ -95,6 +95,10 @@ end
 
 function Global:get()
   return M.AST.GetGlobal(self)
+end
+
+function Global:Name()
+  return self._name
 end
 
 function Global:Type()
