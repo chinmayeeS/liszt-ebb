@@ -66,132 +66,152 @@ local function quit(obj)
 end
 
 -- terralib.type -> number
-local function minValue(typ)
+local function minValue(T)
   return
-    (typ == int)    and -2147483648 or
-    (typ == int8)   and -128 or
-    (typ == int16)  and -32768 or
-    (typ == int32)  and -2147483648 or
-    (typ == int64)  and -9223372036854775808 or
-    (typ == uint)   and 0 or
-    (typ == uint8)  and 0 or
-    (typ == uint16) and 0 or
-    (typ == uint32) and 0 or
-    (typ == uint64) and 0 or
-    (typ == bool)   and 0 or
-    (typ == float)  and -math.huge or
-    (typ == double) and -math.huge or
+    (T == int)    and -2147483648 or
+    (T == int8)   and -128 or
+    (T == int16)  and -32768 or
+    (T == int32)  and -2147483648 or
+    (T == int64)  and -9223372036854775808 or
+    (T == uint)   and 0 or
+    (T == uint8)  and 0 or
+    (T == uint16) and 0 or
+    (T == uint32) and 0 or
+    (T == uint64) and 0 or
+    (T == bool)   and 0 or
+    (T == float)  and -math.huge or
+    (T == double) and -math.huge or
     assert(false)
 end
 
 -- terralib.type -> number
-local function maxValue(typ)
+local function maxValue(T)
   return
-    (typ == int)    and 2147483647 or
-    (typ == int8)   and 127 or
-    (typ == int16)  and 32767 or
-    (typ == int32)  and 2147483647 or
-    (typ == int64)  and 9223372036854775807 or
-    (typ == uint)   and 4294967295 or
-    (typ == uint8)  and 255 or
-    (typ == uint16) and 65535 or
-    (typ == uint32) and 4294967295 or
-    (typ == uint64) and 18446744073709551615 or
-    (typ == bool)   and 1 or
-    (typ == float)  and math.huge or
-    (typ == double) and math.huge or
+    (T == int)    and 2147483647 or
+    (T == int8)   and 127 or
+    (T == int16)  and 32767 or
+    (T == int32)  and 2147483647 or
+    (T == int64)  and 9223372036854775807 or
+    (T == uint)   and 4294967295 or
+    (T == uint8)  and 255 or
+    (T == uint16) and 65535 or
+    (T == uint32) and 4294967295 or
+    (T == uint64) and 18446744073709551615 or
+    (T == bool)   and 1 or
+    (T == float)  and math.huge or
+    (T == double) and math.huge or
     assert(false)
 end
 
 -- string, terralib.type -> number
-local function opIdentity(op, typ)
+local function opIdentity(op, T)
   return
     (op == '+')   and 0 or
     (op == '-')   and 0 or
     (op == '*')   and 1 or
     (op == '/')   and 1 or
-    (op == 'max') and minValue(typ) or
-    (op == 'min') and minValue(typ) or
+    (op == 'max') and minValue(T) or
+    (op == 'min') and minValue(T) or
     assert(false)
 end
 
--- T:terralib.type, N:int -> (T[N], T[N] -> T)
+-------------------------------------------------------------------------------
+-- Vector type support
+-------------------------------------------------------------------------------
+
+-- terralib.type, int -> terralib.type
+local Vector = terralib.memoize(function(T, N)
+  local name = 'Vec'..tostring(N)..tostring(T)
+  local s = terralib.types.newstruct(name)
+  for i=0,N-1 do
+    s.entries:insert({'_'..tostring(i), T})
+  end
+  return s
+end)
+
+-- T:terralib.type, N:int -> (Vector(T,N), Vector(T,N) -> T)
 local emitDotProduct = terralib.memoize(function(T, N)
-  local a = symbol(T[N], 'a')
-  local b = symbol(T[N], 'b')
+  local a = symbol(Vector(T,N), 'a')
+  local b = symbol(Vector(T,N), 'b')
   local elems = terralib.newlist()
   local expr = `0
   for i=0,N-1 do
-    expr = `expr+(a[i]*b[i])
+    expr = `expr + (a.['_'..i] * b.['_'..i])
   end
   local terra dot([a], [b]) : T
     return [expr]
   end
+  if DEBUG then dot:printpretty(false) end
   return dot
 end)
 
--- string, T:terralib.type, N:int -> (T[N], T -> T[N])
+-- string, T:terralib.type, N:int -> (Vector(T,N), T -> Vector(T,N))
 local emitVectorVectorOp = terralib.memoize(function(op, T, N)
-  local a = symbol(T[N], 'a')
-  local b = symbol(T[N], 'b')
+  local a = symbol(Vector(T,N), 'a')
+  local b = symbol(Vector(T,N), 'b')
   local elems = terralib.newlist()
   for i=0,N-1 do
-    elems:insert((op == '+') and (`a[i] + b[i]) or
-                 (op == '-') and (`a[i] - b[i]) or
+    elems:insert((op == '+') and (`a.['_'..i] + b.['_'..i]) or
+                 (op == '-') and (`a.['_'..i] - b.['_'..i]) or
+                 (op == '*') and (`a.['_'..i] * b.['_'..i]) or
+                 (op == '/') and (`a.['_'..i] / b.['_'..i]) or
+                 (op == '%') and (`a.['_'..i] % b.['_'..i]) or
                  assert(false))
   end
-  local terra vvop([a], [b]) : T[N]
-    return array([elems])
+  local terra vvop([a], [b]) : Vector(T,N)
+    return [Vector(T,N)]{[elems]}
   end
+  if DEBUG then vvop:printpretty(false) end
   return vvop
 end)
 
--- string, T:terralib.type, N:int -> (T[N], T -> T[N])
+-- string, T:terralib.type, N:int -> (Vector(T,N), T -> Vector(T,N))
 local emitVectorScalarOp = terralib.memoize(function(op, T, N)
-  local a = symbol(T[N], 'a')
+  local a = symbol(Vector(T,N), 'a')
   local b = symbol(T, 'b')
   local elems = terralib.newlist()
   for i=0,N-1 do
-    elems:insert((op == '+') and (`a[i] + b) or
-                 (op == '-') and (`a[i] - b) or
-                 (op == '*') and (`a[i] * b) or
-                 (op == '/') and (`a[i] / b) or
-                 (op == '%') and (`a[i] % b) or
+    elems:insert((op == '+') and (`a.['_'..i] + b) or
+                 (op == '-') and (`a.['_'..i] - b) or
+                 (op == '*') and (`a.['_'..i] * b) or
+                 (op == '/') and (`a.['_'..i] / b) or
+                 (op == '%') and (`a.['_'..i] % b) or
                  assert(false))
   end
-  local terra vsop([a], [b]) : T[N]
-    return array([elems])
+  local terra vsop([a], [b]) : Vector(T,N)
+    return [Vector(T,N)]{[elems]}
   end
+  if DEBUG then vsop:printpretty(false) end
   return vsop
 end)
 
--- RG.rexpr* -> RG.rexpr
-local function arrayRExpr(elems)
+-- terralib.type, RG.rexpr* -> RG.rexpr
+local function emitVectorCtor(T, elems)
   if #elems == 1 then
     local a = elems[1]
-    return rexpr array(a) end
+    return rexpr [Vector(T,1)]{a} end
   elseif #elems == 2 then
     local a = elems[1]
     local b = elems[2]
-    return rexpr array(a, b) end
+    return rexpr [Vector(T,2)]{a,b} end
   elseif #elems == 3 then
     local a = elems[1]
     local b = elems[2]
     local c = elems[3]
-    return rexpr array(a, b, c) end
+    return rexpr [Vector(T,3)]{a,b,c} end
   elseif #elems == 4 then
     local a = elems[1]
     local b = elems[2]
     local c = elems[3]
     local d = elems[4]
-    return rexpr array(a, b, c, d) end
+    return rexpr [Vector(T,4)]{a,b,c,d} end
   elseif #elems == 5 then
     local a = elems[1]
     local b = elems[2]
     local c = elems[3]
     local d = elems[4]
     local e = elems[5]
-    return rexpr array(a, b, c, d, e) end
+    return rexpr [Vector(T,5)]{a,b,c,d,e} end
   elseif #elems == 6 then
     local a = elems[1]
     local b = elems[2]
@@ -199,9 +219,13 @@ local function arrayRExpr(elems)
     local d = elems[4]
     local e = elems[5]
     local f = elems[6]
-    return rexpr array(a, b, c, d, e, f) end
+    return rexpr [Vector(T,6)]{a,b,c,d,e,f} end
   else assert(false) end
 end
+
+-------------------------------------------------------------------------------
+-- Translation helper functions
+-------------------------------------------------------------------------------
 
 -- () -> boolean
 function F.Function:isKernel()
@@ -209,10 +233,6 @@ function F.Function:isKernel()
           self._decl_ast.ptypes[1]:iskey() and
           not self._decl_ast.exp)
 end
-
--------------------------------------------------------------------------------
--- Basic Regent mappings
--------------------------------------------------------------------------------
 
 -- map(B.Builtin, (double -> double))
 local unaryArithFuns = {
@@ -237,40 +257,88 @@ local binaryArithFuns = {
 }
 
 -- T.Type -> terralib.type
-local function toRType(ltype)
-  if ltype:isprimitive() then
-    return ltype:terratype()
-  elseif ltype:isvector() then
-    return toRType(ltype.type)[ltype.N]
-  elseif ltype:ismatrix() then
-    return toRType(ltype.type)[ltype.Nrow][ltype.Ncol]
-  elseif ltype:iskey() then
-    return ltype.relation:indexType()
+local function toRType(typ)
+  if typ:isprimitive() then
+    return typ:terratype()
+  elseif typ:isvector() then
+    return Vector(toRType(typ.type), typ.N)
+  elseif typ:ismatrix() then
+    -- TODO: Not supporting matrix types, or operations
+    assert(false)
+  elseif typ:iskey() then
+    return typ.relation:indexType()
   else assert(false) end
 end
 
--- M.ExprConst, terralib.type? -> RG.rexpr
-local function toRConst(lit, typ)
+-- M.ExprConst -> T.Type
+local function inferType(lit)
   if type(lit) == 'boolean' then
-    assert(not typ or typ == bool)
-    return rexpr lit end
+    return L.bool
   elseif type(lit) == 'number' then
-    if typ then
-      return rexpr [typ](lit) end
+    if lit == math.floor(lit) then
+      return L.int
     else
-      return rexpr lit end
+      return L.double
     end
   elseif type(lit) == 'table' then
     assert(terralib.israwlist(lit))
-    local elemT
-    if typ then
-      assert(#lit == typ.N)
-      elemT = typ.type
-    end
-    return arrayRExpr(terralib.newlist(lit):map(function(e)
-      return toRConst(e, elemT)
-    end))
+    assert(#lit > 0)
+    return L.vector(inferType(lit[1]), #lit)
   else assert(false) end
+end
+
+-- M.ExprConst, T.Type? -> RG.rexpr
+local function toRConst(lit, typ)
+  typ = typ or inferType(lit)
+  if type(lit) == 'boolean' then
+    assert(typ == L.bool)
+    return rexpr lit end
+  elseif type(lit) == 'number' then
+    return rexpr [toRType(typ)](lit) end
+  elseif type(lit) == 'table' then
+    assert(terralib.israwlist(lit))
+    assert(#lit == typ.N)
+    return emitVectorCtor(
+      toRType(typ.type),
+      terralib.newlist(lit):map(function(e)
+        return toRConst(e, typ.type)
+      end))
+  else assert(false) end
+end
+
+-- string, L.Type, RG.rexpr, RG.rexpr -> RG.rquote
+local function emitReduce(op, typ, lval, exp)
+  if typ:isvector() then
+    local tmp = RG.newsymbol(toRType(typ), 'tmp')
+    local stmts = terralib.newlist()
+    stmts:insert(rquote var [tmp] = exp end)
+    for i=0,typ.N-1 do
+      stmts:insert(
+        (op == '+')   and rquote lval.['_'..i] +=   tmp.['_'..i] end or
+        (op == '-')   and rquote lval.['_'..i] -=   tmp.['_'..i] end or
+        (op == '*')   and rquote lval.['_'..i] *=   tmp.['_'..i] end or
+        (op == '/')   and rquote lval.['_'..i] /=   tmp.['_'..i] end or
+        (op == 'max') and rquote lval.['_'..i] max= tmp.['_'..i] end or
+        (op == 'min') and rquote lval.['_'..i] min= tmp.['_'..i] end or
+        assert(false))
+    end
+    return rquote [stmts] end
+  end
+  return
+    (op == '+')   and rquote lval +=   exp end or
+    (op == '-')   and rquote lval -=   exp end or
+    (op == '*')   and rquote lval *=   exp end or
+    (op == '/')   and rquote lval /=   exp end or
+    (op == 'max') and rquote lval max= exp end or
+    (op == 'min') and rquote lval min= exp end or
+    assert(false)
+end
+
+-- RG.rexpr, AST.Expression -> RG.rexpr
+local function emitIndexExpr(base, index)
+  assert(index:is(AST.Number))
+  assert(index.node_type == L.int)
+  return rexpr base.['_'..index.value] end
 end
 
 -------------------------------------------------------------------------------
@@ -384,15 +452,15 @@ function FunContext.New(info, argNames, argTypes)
   end
   -- Process arguments
   for i,lsym in ipairs(argNames) do
-    local rtype
+    local T
     if i > 1 or not info.domainRel then
       -- If this is a kernel, leave the first argument untyped (it will be used
       -- as the loop variable, and not included in the signature).
-      rtype = toRType(argTypes[i])
+      T = toRType(argTypes[i])
     end
-    local rsym = RG.newsymbol(rtype, tostring(lsym))
+    local rsym = RG.newsymbol(T, tostring(lsym))
     self.args:insert(rsym)
-    self.localMap[lsym] = rexpr rsym end
+    self.localMap[lsym] = rsym
   end
   -- Process field access modes
   for fld,pt in pairs(info.field_use) do
@@ -438,7 +506,7 @@ end
 function FunContext:addLocal(lsym)
   assert(not self.localMap[lsym])
   local rsym = RG.newsymbol(nil, tostring(lsym))
-  self.localMap[lsym] = rexpr rsym end
+  self.localMap[lsym] = rsym
   return rsym
 end
 
@@ -526,7 +594,7 @@ function AST.UserFunction:toTask(info)
     do [body] end
     tsk = st
   else
-    local task st([ctxt:signature()]) end
+    local task st([ctxt:signature()]) [body] end
     tsk = st
   end
   -- Finalize task
@@ -629,18 +697,14 @@ function AST.BinaryOp:toRExpr(ctxt)
   local b = self.rhs:toRExpr(ctxt)
   local t1 = self.lhs.node_type
   local t2 = self.rhs.node_type
-  -- TODO: Not handling matrix operations
   if t1:isvector() and t2:isvector() then
     local fun = emitVectorVectorOp(self.op, toRType(t1.type), t1.N)
-    if DEBUG then fun:printpretty(false) end
     return rexpr fun(a, b) end
   elseif t1:isvector() and t2:isscalar() then
     local fun = emitVectorScalarOp(self.op, toRType(t2), t1.N)
-    if DEBUG then fun:printpretty(false) end
     return rexpr fun(a, b) end
   elseif t1:isscalar() and t2:isvector() and self.op == '*' then
     local fun = emitVectorScalarOp(self.op, toRType(t1), t2.N)
-    if DEBUG then fun:printpretty(false) end
     return rexpr fun(b, a) end
   end
   assert(t1:isscalar() and t2:isscalar())
@@ -768,7 +832,6 @@ function AST.Call:toRExpr(ctxt)
     local t2 = self.params[2].node_type
     assert(t1:isvector() and t2:isvector() and t1.N == t2.N)
     local fun = emitVectorVectorOp('*', toRType(t1.type), t1.N)
-    if DEBUG then fun:printpretty(false) end
     local arg1 = self.params[1]:toRExpr(ctxt)
     local arg2 = self.params[2]:toRExpr(ctxt)
     return rexpr fun([arg1], [arg2]) end
@@ -779,8 +842,7 @@ end
 function AST.Cast:toRExpr(ctxt)
   -- self.node_type : T.Type
   -- self.value     : AST.Expression
-  local rtype = toRType(self.node_type)
-  return rexpr [rtype]([self.value:toRExpr(ctxt)]) end
+  return rexpr [toRType(self.node_type)]([self.value:toRExpr(ctxt)]) end
 end
 function AST.FieldAccess:toRExpr(ctxt)
   -- self.field : R.Field
@@ -797,9 +859,7 @@ function AST.FieldAccessIndex:toRExpr(ctxt)
   -- self.field : R.Field
   -- self.key   : AST.Expression
   -- self.index : AST.Expression
-  return rexpr
-    [self.base:toRExpr(ctxt)][ [self.index:toRExpr(ctxt) ] ]
-  end
+  return emitIndexExpr(self.base:toRExpr(ctxt), self.index)
 end
 function AST.Global:toRExpr(ctxt)
   -- self.global : L.Global
@@ -810,9 +870,7 @@ end
 function AST.GlobalIndex:toRExpr(ctxt)
   -- self.index  : AST.Expression
   -- self.global : L.Global
-  return rexpr
-    [ctxt.globalMap[self.global]][ [self.index:toRExpr(ctxt)] ]
-  end
+  return emitIndexExpr(ctxt.globalMap[self.global], self.index)
 end
 function AST.LetExpr:toRExpr(ctxt)
   -- self.block       : AST.Block
@@ -860,9 +918,7 @@ function AST.SquareIndex:toRExpr(ctxt)
   -- self.node_type : T.Type
   -- self.base      : AST.Expression
   -- self.index     : AST.Expression
-  return rexpr
-    [self.base:toRExpr(ctxt)][ [self.index:toRExpr(ctxt)] ]
-  end
+  return emitIndexExpr(self.base:toRExpr(ctxt), self.index)
 end
 function AST.String:toRExpr(ctxt)
   quit(self)
@@ -873,7 +929,6 @@ end
 function AST.UnaryOp:toRExpr(ctxt)
   -- self.exp : AST.Expression
   -- self.op  : string
-  -- TODO: Not handling matrix operations
   local t = self.exp.node_type
   local arg = self.exp:toRExpr(ctxt)
   if t:isvector() and self.op == '-' then
@@ -889,9 +944,11 @@ end
 function AST.VectorLiteral:toRExpr(ctxt)
   -- self.node_type : T.Type
   -- self.elems     : AST.Expression*
-  return arrayRExpr(terralib.newlist(self.elems):map(function(e)
-    return e:toRExpr(ctxt)
-  end))
+  return emitVectorCtor(
+    toRType(self.node_type.type),
+    terralib.newlist(self.elems):map(function(e)
+      return e:toRExpr(ctxt)
+    end))
 end
 function AST.Where:toRExpr(ctxt)
   quit(self)
@@ -905,27 +962,13 @@ function AST.Assignment:toRQuote(ctxt)
   -- self.lvalue   : AST.Expression
   -- self.exp      : AST.Expression
   -- self.reduceop : string?
-  if self.reduceop and not self.lvalue.node_type:isscalar() then
-    local opNode = AST.BinaryOp:DeriveFrom(self)
-    opNode.lhs = self.lvalue
-    opNode.op = self.reduceop
-    opNode.rhs = self.exp
-    local asgnNode = AST.Assignment:DeriveFrom(self)
-    asgnNode.lvalue = self.lvalue
-    asgnNode.exp = opNode
-    return asgnNode:toRQuote(ctxt)
+  local lval = self.lvalue:toRExpr(ctxt)
+  local exp = self.exp:toRExpr(ctxt)
+  if self.reduceop then
+    return emitReduce(self.reduceop, self.exp.node_type, lval, exp)
+  else
+    return rquote lval = exp end
   end
-  local a = self.lvalue:toRExpr(ctxt)
-  local b = self.exp:toRExpr(ctxt)
-  return
-    (not self.reduceop)      and rquote a = b    end or
-    (self.reduceop == '+')   and rquote a += b   end or
-    (self.reduceop == '-')   and rquote a -= b   end or
-    (self.reduceop == '*')   and rquote a *= b   end or
-    (self.reduceop == '/')   and rquote a /= b   end or
-    (self.reduceop == 'max') and rquote a max= b end or
-    (self.reduceop == 'min') and rquote a min= b end or
-    assert(false)
 end
 function AST.Break:toRQuote(ctxt)
   quit(self)
@@ -959,17 +1002,13 @@ function AST.FieldWrite:toRQuote(ctxt)
   -- self.fieldaccess : AST.FieldAccess
   -- self.exp         : AST.Expression
   -- self.reduceop    : string?
-  local a = self.fieldaccess:toRExpr(ctxt)
-  local b = self.exp:toRExpr(ctxt)
-  return
-    (not self.reduceop)      and rquote a = b    end or
-    (self.reduceop == '+')   and rquote a += b   end or
-    (self.reduceop == '-')   and rquote a -= b   end or
-    (self.reduceop == '*')   and rquote a *= b   end or
-    (self.reduceop == '/')   and rquote a /= b   end or
-    (self.reduceop == 'max') and rquote a max= b end or
-    (self.reduceop == 'min') and rquote a min= b end or
-    assert(false)
+  local lval = self.fieldaccess:toRExpr(ctxt)
+  local exp = self.exp:toRExpr(ctxt)
+  if self.reduceop then
+    return emitReduce(self.reduceop, self.exp.node_type, lval, exp)
+  else
+    return rquote lval = exp end
+  end
 end
 function AST.GenericFor:toRQuote(ctxt)
   quit(self)
@@ -979,16 +1018,9 @@ function AST.GlobalReduce:toRQuote(ctxt)
   -- self.reduceop : string
   -- self.exp      : AST.Expression
   assert(self.global.global == ctxt.reducedGlobal)
-  local acc = ctxt.globalReduceAcc
-  local val = self.exp:toRExpr(ctxt)
-  return
-    (self.reduceop == '+')   and rquote acc += val   end or
-    (self.reduceop == '-')   and rquote acc -= val   end or
-    (self.reduceop == '*')   and rquote acc *= val   end or
-    (self.reduceop == '/')   and rquote acc /= val   end or
-    (self.reduceop == 'max') and rquote acc max= val end or
-    (self.reduceop == 'min') and rquote acc min= val end or
-    assert(false)
+  local lval = ctxt.globalReduceAcc
+  local exp = self.exp:toRExpr(ctxt)
+  return emitReduce(self.reduceop, self.exp.node_type, lval, exp)
 end
 function AST.IfStatement:toRQuote(ctxt)
   -- self.if_blocks  : AST.CondBlock*
@@ -1102,14 +1134,13 @@ function M.AST.If:toRQuote(ctxt)
 end
 function M.AST.LoadField:toRQuote(ctxt)
   local relSym = ctxt.relMap[self.fld:Relation()]
-  local valTyp = toRType(self.fld:Type())
   return rquote
-    fill(relSym.[self.fld:Name()], [toRConst(self.val, valTyp)])
+    fill(relSym.[self.fld:Name()], [toRConst(self.val, self.fld:Type())])
   end
 end
 function M.AST.SetGlobal:toRQuote(ctxt)
   return rquote
-    [ctxt.globalMap[self.global]] = [self.expr:toRExpr(ctxt)]
+    [ctxt.globalMap[self.global]] = [self.expr:toRExpr(ctxt, self.global:Type())]
   end
 end
 function M.AST.While:toRQuote(ctxt)
@@ -1150,19 +1181,24 @@ function M.AST.Compare:toRExpr(ctxt)
     assert(false)
 end
 
--- ProgramContext -> RG.rexpr
-function M.AST.Expr:toRExpr(ctxt)
+-- ProgramContext, T.Type? -> RG.rexpr
+function M.AST.Expr:toRExpr(ctxt, typ)
   error('Abstract method')
 end
-function M.AST.Const:toRExpr(ctxt)
-  return rexpr [toRConst(self.val)] end
+function M.AST.Const:toRExpr(ctxt, typ)
+  return rexpr [toRConst(self.val, typ)] end
 end
-function M.AST.GetGlobal:toRExpr(ctxt)
-  return rexpr [assert(ctxt.globalMap[self.global])] end
+function M.AST.GetGlobal:toRExpr(ctxt, typ)
+  local globSym = assert(ctxt.globalMap[self.global])
+  if typ then
+    return rexpr [toRType(typ)](globSym) end
+  else
+    return rexpr globSym end
+  end
 end
-function M.AST.BinaryOp:toRExpr(ctxt)
-  local a = self.lhs:toRExpr(ctxt)
-  local b = self.rhs:toRExpr(ctxt)
+function M.AST.BinaryOp:toRExpr(ctxt, typ)
+  local a = self.lhs:toRExpr(ctxt, typ)
+  local b = self.rhs:toRExpr(ctxt, typ)
   return
     (self.op == '+') and rexpr a + b end or
     (self.op == '-') and rexpr a - b end or
@@ -1171,8 +1207,8 @@ function M.AST.BinaryOp:toRExpr(ctxt)
     (self.op == '%') and rexpr a % b end or
     assert(false)
 end
-function M.AST.UnaryOp:toRExpr(ctxt)
-  local a = self.arg:toRExpr(ctxt)
+function M.AST.UnaryOp:toRExpr(ctxt, typ)
+  local a = self.arg:toRExpr(ctxt, typ)
   return
     (self.op == '-') and rexpr -a end or
     assert(false)
@@ -1204,10 +1240,9 @@ function A.translateAndRun()
   end
   -- Emit global declarations
   for g,val in pairs(globalInits) do
-    local typ = toRType(g:Type())
-    local x = RG.newsymbol(typ, nil)
+    local x = RG.newsymbol(toRType(g:Type()), nil)
     ctxt.globalMap[g] = x
-    stmts:insert(rquote var [x] = [toRConst(val, typ)] end)
+    stmts:insert(rquote var [x] = [toRConst(val, g:Type())] end)
   end
   -- Emit region declarations
   for _,rel in ipairs(rels) do
@@ -1247,7 +1282,7 @@ function A.translateAndRun()
         var coloring = RG.c.legion_domain_point_coloring_create()
         var rect = [rectExpr]
         RG.c.legion_domain_point_coloring_color_domain(coloring, int1d(0), rect)
-        var [subrg] = partition(disjoint, rg, coloring, colors)
+        var [subrg] = partition(disjoint, rg, coloring, colors)[0]
         RG.c.legion_domain_point_coloring_destroy(coloring)
       end)
     end
