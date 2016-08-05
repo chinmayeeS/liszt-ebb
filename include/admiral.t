@@ -756,6 +756,18 @@ function AST.Call:toRExpr(ctxt)
     local t2 = self.params[2].node_type
     assert(t1:isvector() and t2:isvector() and t1.N == t2.N)
     local fun = emitDotProduct(toRType(t1.type), t1.N)
+    local arg1 = self.params[1]:toRExpr(ctxt)
+    local arg2 = self.params[2]:toRExpr(ctxt)
+    return rexpr fun([arg1], [arg2]) end
+  end
+  -- Element-wise multiplication
+  -- self.params[1] : AST.Expression
+  -- self.params[2] : AST.Expression
+  if self.func == L.times then
+    local t1 = self.params[1].node_type
+    local t2 = self.params[2].node_type
+    assert(t1:isvector() and t2:isvector() and t1.N == t2.N)
+    local fun = emitVectorVectorOp('*', toRType(t1.type), t1.N)
     if DEBUG then fun:printpretty(false) end
     local arg1 = self.params[1]:toRExpr(ctxt)
     local arg2 = self.params[2]:toRExpr(ctxt)

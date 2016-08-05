@@ -65,6 +65,7 @@ L.assert          = B.assert
 L.rand            = B.rand
 
 L.dot             = B.dot
+L.times           = B.times
 L.cross           = B.cross
 L.length          = B.length
 

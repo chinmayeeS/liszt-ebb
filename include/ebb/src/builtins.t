@@ -365,6 +365,33 @@ function B.dot.check(ast, ctxt)
     return errorT
 end
 
+B.times = Builtin.new()
+function B.times.check(ast, ctxt)
+    local args = ast.params
+    if #args ~= 2 then
+        ctxt:error(ast, "element-wise multiplication expects exactly 2 arguments "..
+                        "(instead got " .. #args .. ")")
+        return errorT
+    end
+
+    local lt1 = args[1].node_type
+    local lt2 = args[2].node_type
+
+    local numvec_err = 'arguments to element-wise multiplication must be numeric vectors'
+    local veclen_err = 'vectors in element-wise multiplication must have equal dimensions'
+    if not lt1:isvector()  or not lt2:isvector() or
+       not lt1:isnumeric() or not lt2:isnumeric()
+    then
+        ctxt:error(ast, numvec_err)
+    elseif lt1.N ~= lt2.N then
+        ctxt:error(ast, veclen_err)
+    else
+        return T.type_join(lt1, lt2)
+    end
+
+    return errorT
+end
+
 B.cross = Builtin.new()
 function B.cross.check(ast, ctxt)
     local args = ast.params
