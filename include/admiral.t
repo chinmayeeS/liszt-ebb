@@ -187,40 +187,7 @@ end)
 
 -- terralib.type, RG.rexpr* -> RG.rexpr
 local function emitVectorCtor(T, elems)
-  if #elems == 1 then
-    local a = elems[1]
-    return rexpr [Vector(T,1)]{a} end
-  elseif #elems == 2 then
-    local a = elems[1]
-    local b = elems[2]
-    return rexpr [Vector(T,2)]{a,b} end
-  elseif #elems == 3 then
-    local a = elems[1]
-    local b = elems[2]
-    local c = elems[3]
-    return rexpr [Vector(T,3)]{a,b,c} end
-  elseif #elems == 4 then
-    local a = elems[1]
-    local b = elems[2]
-    local c = elems[3]
-    local d = elems[4]
-    return rexpr [Vector(T,4)]{a,b,c,d} end
-  elseif #elems == 5 then
-    local a = elems[1]
-    local b = elems[2]
-    local c = elems[3]
-    local d = elems[4]
-    local e = elems[5]
-    return rexpr [Vector(T,5)]{a,b,c,d,e} end
-  elseif #elems == 6 then
-    local a = elems[1]
-    local b = elems[2]
-    local c = elems[3]
-    local d = elems[4]
-    local e = elems[5]
-    local f = elems[6]
-    return rexpr [Vector(T,6)]{a,b,c,d,e,f} end
-  else assert(false) end
+  return rexpr [Vector(T,#elems)]{[elems]} end
 end
 
 -------------------------------------------------------------------------------
@@ -427,15 +394,7 @@ function FunContext.New(info, argNames, argTypes)
     accessedRels    = terralib.newlist(), -- R.Relation*
     readGlobals     = terralib.newlist(), -- L.Global*
     -- Field use information
-    -- TODO: implicitly over accessedRels[1]
-    readCols        = terralib.newlist(), -- string*
-    writeCols       = terralib.newlist(), -- string*
-    plusRdCols      = terralib.newlist(), -- string*
-    minusRdCols     = terralib.newlist(), -- string*
-    multRdCols      = terralib.newlist(), -- string*
-    divRdCols       = terralib.newlist(), -- string*
-    maxRdCols       = terralib.newlist(), -- string*
-    minRdCols       = terralib.newlist(), -- string*
+    privileges      = terralib.newlist(), -- RG.privilege*
     -- Global reduction information
     reducedGlobal   = nil,                -- L.Global?
     globalReduceAcc = nil,                -- RG.symbol?
@@ -464,26 +423,23 @@ function FunContext.New(info, argNames, argTypes)
   end
   -- Process field access modes
   for fld,pt in pairs(info.field_use) do
-    if #self.accessedRels > 0 then
-      assert(fld:Relation() == self.accessedRels[1])
-    else
-      local rel = fld:Relation()
+    local rel = fld:Relation()
+    local rg = self.relMap[rel]
+    if not rg then
+      rg = RG.newsymbol(rel:regionType(), rel:Name())
       self.accessedRels:insert(rel)
-      self.relMap[rel] = RG.newsymbol(rel:regionType(), rel:Name())
+      self.relMap[rel] = rg
     end
     -- Assuming phase checking has checked for errors
-    if pt.read or pt.write then self.readCols:insert(fld:Name()) end
-    if pt.write then self.writeCols:insert(fld:Name()) end
+    if pt.read or pt.write then
+      self.privileges:insert(RG.privilege(RG.reads, rg, fld:Name()))
+    end
+    if pt.write then
+      self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
+    end
     if pt.reduceop then
-      local rdCols =
-        (pt.reduceop == '+')   and self.plusRdCols or
-        (pt.reduceop == '-')   and self.minusRdCols or
-        (pt.reduceop == '*')   and self.multRdCols or
-        (pt.reduceop == '/')   and self.divRdCols or
-        (pt.reduceop == 'max') and self.maxRdCols or
-        (pt.reduceop == 'min') and self.minRdCols or
-        assert(false)
-      rdCols:insert(fld:Name())
+      self.privileges:insert(
+        RG.privilege(RG.reduces(pt.reduceop), rg, fld:Name()))
     end
   end
   -- Process global access modes
@@ -569,32 +525,13 @@ function AST.UserFunction:toTask(info)
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
     local task st([ctxt:signature()]) where
-      dom <= univ,
-      reads      (univ.[ctxt.readCols]),
-      writes     (univ.[ctxt.writeCols]),
-      reduces +  (univ.[ctxt.plusRdCols]),
-      reduces -  (univ.[ctxt.minusRdCols]),
-      reduces *  (univ.[ctxt.multRdCols]),
-      reduces /  (univ.[ctxt.divRdCols]),
-      reduces max(univ.[ctxt.maxRdCols]),
-      reduces min(univ.[ctxt.minRdCols])
-    do [body] end
-    tsk = st
-  elseif #ctxt.accessedRels > 0 then
-    local univ = ctxt.relMap[ctxt.accessedRels[1]]
-    local task st([ctxt:signature()]) where
-      reads      (univ.[ctxt.readCols]),
-      writes     (univ.[ctxt.writeCols]),
-      reduces +  (univ.[ctxt.plusRdCols]),
-      reduces -  (univ.[ctxt.minusRdCols]),
-      reduces *  (univ.[ctxt.multRdCols]),
-      reduces /  (univ.[ctxt.divRdCols]),
-      reduces max(univ.[ctxt.maxRdCols]),
-      reduces min(univ.[ctxt.minRdCols])
+      dom <= univ, [ctxt.privileges]
     do [body] end
     tsk = st
   else
-    local task st([ctxt:signature()]) [body] end
+    local task st([ctxt:signature()]) where
+      [ctxt.privileges]
+    do [body] end
     tsk = st
   end
   -- Finalize task
