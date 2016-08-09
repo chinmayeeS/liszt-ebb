@@ -330,7 +330,7 @@ end
 -- () -> terralib.struct
 R.Relation.fieldSpace = terralib.memoize(function(self)
   local fs = terralib.types.newstruct(self:Name() .. '_columns')
-  for _,fld in ipairs(self._fields) do
+  for _,fld in ipairs(self:Fields()) do
     fs.entries:insert({fld:Name(), toRType(fld:Type())})
   end
   if DEBUG then fs:printpretty() end
@@ -558,10 +558,10 @@ function F.Function:toKernelTask()
   --   field_use      : map(R.Field, P.PhaseType)
   --   global_use     : map(L.Global, P.PhaseType)
   -- }
-  info.name = self._name
+  info.name = self:Name()
   info.domainRel = argRel
   if DEBUG then
-    print(self._name)
+    print(self:Name())
     typedAST:pretty_print()
   end
   local tsk, ctxt = typedAST:toTask(info)
@@ -585,11 +585,11 @@ function F.Function:toHelperTask(argTypes, callerDom)
   --   field_use      : map(R.Field, P.PhaseType)
   --   global_use     : map(L.Global, P.PhaseType)
   -- }
-  info.name = self._name
+  info.name = self:Name()
   info.domainRel = nil
   typedAST.ptypes = argTypes
   if DEBUG then
-    print(self._name)
+    print(self:Name())
     typedAST:pretty_print()
   end
   local tsk, ctxt = typedAST:toTask(info)
@@ -1161,7 +1161,6 @@ function A.translateAndRun()
   -- Collect declarations
   local globalInits = {} -- map(L.Global, M.ExprConst)
   local rels = terralib.newlist() -- R.Relation*
-  local subsetDefs = {} -- map(R.Subset, (int[1-3][2])*)
   for _,decl in ipairs(M.decls()) do
     if M.AST.NewField.check(decl) then
       -- Do nothing
@@ -1171,8 +1170,8 @@ function A.translateAndRun()
       globalInits[decl.global] = decl.init
     elseif M.AST.NewRelation.check(decl) then
       rels:insert(decl.rel)
-    elseif M.AST.NewSubset.check(decl) then
-      subsetDefs[decl.subset] = decl.rectangles
+    elseif M.AST.NewPartition.check(decl) then
+      -- Do nothing
     else assert(false) end
   end
   -- Emit global declarations
@@ -1188,38 +1187,47 @@ function A.translateAndRun()
     stmts:insert(rquote
       var [rg] = [rel:mkRegionInit()]
     end)
-  end
-  -- Emit subset declarations
-  for subset,rects in pairs(subsetDefs) do
-    local rel = subset:Relation()
-    if #rects > 1 then
-      print('WARNING: Skipping multi-rect subset '..subset:FullName())
-    else
-      local rg = ctxt.relMap[rel]
-      local subrg = RG.newsymbol(nil, rel:Name()..'_'..subset:Name())
-      ctxt.subsetMap[subset] = subrg
-      local rect = rects[1]
-      local rectExpr =
-        (#rect == 1) and rexpr
-          rect1d{ lo = [rect[1][1]], hi = [rect[1][2]] }
-        end or
-        (#rect == 2) and rexpr
-          rect2d{
-            lo = int2d{ x = [rect[1][1]], y = [rect[2][1]] },
-            hi = int2d{ x = [rect[1][2]], y = [rect[2][2]] }}
-        end or
-        (#rect == 3) and rexpr
-          rect3d{
-            lo = int3d{ x = [rect[1][1]], y = [rect[2][1]], z = [rect[3][1]] },
-            hi = int3d{ x = [rect[1][2]], y = [rect[2][2]], z = [rect[3][2]] }}
-        end or
-        assert(false)
+    for _,part in ipairs(rel:Partitions()) do
+      local colors = RG.newsymbol(nil, 'colors')
+      local coloring = RG.newsymbol(nil, 'coloring')
       stmts:insert(rquote
-        var colors = ispace(int1d, 1)
-        var coloring = RG.c.legion_domain_point_coloring_create()
-        var rect = [rectExpr]
-        RG.c.legion_domain_point_coloring_color_domain(coloring, int1d(0), rect)
-        var [subrg] = partition(disjoint, rg, coloring, colors)[0]
+        var [colors] = ispace(int1d, [#part])
+        var [coloring] = RG.c.legion_domain_point_coloring_create()
+      end)
+      for i,subset in ipairs(part) do
+        local rect = subset:Rectangle() -- int[1-3][2]
+        local rectExpr =
+          (#rect == 1) and rexpr
+            rect1d{ lo = [rect[1][1]], hi = [rect[1][2]] }
+          end or
+          (#rect == 2) and rexpr
+            rect2d{
+              lo = int2d{ x = [rect[1][1]], y = [rect[2][1]] },
+              hi = int2d{ x = [rect[1][2]], y = [rect[2][2]] }}
+          end or
+          (#rect == 3) and rexpr
+            rect3d{
+              lo = int3d{ x = [rect[1][1]], y = [rect[2][1]], z = [rect[3][1]] },
+              hi = int3d{ x = [rect[1][2]], y = [rect[2][2]], z = [rect[3][2]] }}
+          end or
+          assert(false)
+        stmts:insert(rquote
+          RG.c.legion_domain_point_coloring_color_domain
+            (coloring, int1d(i-1), rectExpr)
+        end)
+      end
+      local p = RG.newsymbol(nil, 'p')
+      stmts:insert(rquote
+        var [p] = partition(disjoint, rg, coloring, colors)
+      end)
+      for i,subset in ipairs(part) do
+        local subrg = RG.newsymbol(nil, subset:FullName())
+        ctxt.subsetMap[subset] = subrg
+        stmts:insert(rquote
+          var [subrg] = p[i-1]
+        end)
+      end
+      stmts:insert(rquote
         RG.c.legion_domain_point_coloring_destroy(coloring)
       end)
     end

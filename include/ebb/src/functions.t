@@ -69,6 +69,10 @@ function F.NewFunction(func_ast, luaenv)
   return ufunc
 end
 
+function Function:Name()
+  return self._name
+end
+
 function Function:setname(name)
   if type(name) ~= 'string' then error('expected string argument', 2) end
   if self._typed_at_least_once then

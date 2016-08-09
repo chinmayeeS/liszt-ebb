@@ -141,17 +141,16 @@ function R.NewRelation(params)
 
   -- CONSTRUCT and return the relation
   local rel = setmetatable( {
-    _name      = params.name,
-    _mode      = mode,
-    _uid       = relation_uid,
+    _name       = params.name,
+    _mode       = mode,
+    _uid        = relation_uid,
 
-    _fields    = terralib.newlist(),
-    _subsets   = terralib.newlist(),
-    _macros    = terralib.newlist(),
-    _functions = terralib.newlist(),
+    _fields     = terralib.newlist(),
+    _partitions = terralib.newlist(),
+    _macros     = terralib.newlist(),
+    _functions  = terralib.newlist(),
 
     _incoming_refs = {}, -- used for walking reference graph
-    _disjoint_partition = nil
   },
   Relation)
   relation_uid = relation_uid + 1 -- increment unique id counter
@@ -183,6 +182,12 @@ end
 function Relation:Name()
   return self._name
 end
+function Relation:Fields()
+  return self._fields
+end
+function Relation:Partitions()
+  return self._partitions
+end
 function Relation:Dims()
   if not self:isGrid() then
     return { self:Size() }
@@ -203,10 +208,6 @@ function Relation:foreach(user_func, ...)
     error('foreach(): expects an ebb function as the first argument', 2)
   end
   user_func:_doForEach(self, ...)
-end
-
-function Relation:hasSubsets()
-  return #self._subsets ~= 0
 end
 
 -- prevent user from modifying the lua table
@@ -343,6 +344,10 @@ function Subset:FullName()
   return self._owner._name .. '.' .. self._name
 end
 
+function Subset:Rectangle()
+  return self._rectangle
+end
+
 -- prevent user from modifying the lua table
 function Subset:__newindex(name,value)
   error("Cannot assign members to Subset object", 2)
@@ -365,53 +370,40 @@ local function is_subrectangle(rel, obj)
   return true
 end
 
-function Relation:_INTERNAL_NewSubsetFromRectangles(name, rectangles)
-  -- setup and install the subset object
-  local subset = setmetatable({
-    _owner    = self,
-    _name     = name,
-  }, Subset)
-  rawset(self, name, subset)
-  self._subsets:insert(subset)
-  M.decls():insert(M.AST.NewSubset(subset, rectangles))
-  return subset
-end
-
-function Relation:NewSubset( name, arg )
-  if not name or type(name) ~= "string" then
-    error("NewSubset() expects a string as the first argument", 2) end
-  if not is_valid_lua_identifier(name) then
-    error(valid_name_err_msg.subset, 2) end
-  if self[name] then
-    error("Cannot create a new subset with name '"..name.."'  "..
-          "That name is already being used.", 2)
+function Relation:NewPartition( rects )
+  if not self:isGrid() then
+    error("NewPartition(): Can only be called on grid-typed relations", 2)
   end
-  if type(arg) == 'table' then
-    if self:isGrid() then
-      if arg.rectangles then
-        if not terralib.israwlist(arg.rectangles) then
-          error("NewSubset(): Was expecting 'rectangles' to be a list", 2)
-        end
-        for i,r in ipairs(arg.rectangles) do
-          if not is_subrectangle(self, r) then
-            error("NewSubset(): Entry #"..i.." in 'rectangles' list was "..
-                  "not a rectangle, specified as a list of "..(#self:Dims())..
-                  " range pairs lying inside the grid", 2)
-          end
-        end
-        return self:_INTERNAL_NewSubsetFromRectangles(name, arg.rectangles)
-      else -- assume a single rectangle
-        if not is_subrectangle(self, arg) then
-          error('NewSubset(): Was expecting a rectangle specified as a '..
-                'list of '..(#self:Dims())..' range pairs lying inside '..
-                'the grid', 2)
-        end
-        return self:_INTERNAL_NewSubsetFromRectangles(name, { arg })
-      end
+  local partition = terralib.newlist()
+  for name,rect in pairs(rects) do
+    if type(name) ~= "string" then
+      error("NewPartition(): Subset names must be strings", 2)
     end
-  else
-    error("Unexpected argument to subsets.", 2)
+    if not is_valid_lua_identifier(name) then
+      error(valid_name_err_msg.subset, 2)
+    end
+    if self[name] then
+      error("Cannot create a new subset with name '"..name.."'  "..
+              "That name is already being used.", 2)
+    end
+    if not type(rect) == 'table' or not terralib.israwlist(rect) then
+      error("NewPartition(): Rectangles must be lists", 2)
+    end
+    if not is_subrectangle(self, rect) then
+      error("NewPartition(): Rectangle was not a list of "..(#self:Dims())..
+            " range pairs lying inside the grid", 2)
+    end
+    -- TODO: Assuming the rectangles are disjoint, and cover the entire grid.
+    local subset = setmetatable({
+      _owner     = self,
+      _name      = name,
+      _rectangle = rect,
+    }, Subset)
+    rawset(self, name, subset)
+    partition:insert(subset)
   end
+  self._partitions:insert(partition)
+  M.decls():insert(M.AST.NewPartition(partition))
 end
 
 

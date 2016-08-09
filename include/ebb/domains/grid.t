@@ -101,13 +101,14 @@ Grid3d.__index = Grid3d
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 
-local function boundary_rectangles_2d(X, Y, xn_bd, yn_bd)
-  local rects = {}
-  if xn_bd > 0 then table.insert(rects, { {0,xn_bd-1},    {0,Y-1} })
-                    table.insert(rects, { {X-xn_bd,X-1},  {0,Y-1} }) end
-  if yn_bd > 0 then table.insert(rects, { {0,X-1},  {0,yn_bd-1}   })
-                    table.insert(rects, { {0,X-1},  {Y-yn_bd,Y-1} }) end
-  return rects
+local function rectangles_2d(X, Y, xb, yb)
+  return {
+    boundary_xneg = { {0,xb-1},    {0,Y-1}     },
+    boundary_xpos = { {X-xb,X-1},  {0,Y-1}     },
+    boundary_yneg = { {xb,X-xb-1}, {0,yb-1}    },
+    boundary_ypos = { {xb,X-xb-1}, {Y-yb,Y-1}  },
+    interior      = { {xb,X-xb-1}, {yb,Y-yb-1} },
+  }
 end
 
 local function setup2dCells(grid)
@@ -124,11 +125,7 @@ local function setup2dCells(grid)
                                  {0,1,y}}, c)                   end))
 
   -- Boundary/Interior subsets
-  cells:NewSubset('boundary', {
-    rectangles = boundary_rectangles_2d(Cx, Cy, xn_bd, yn_bd)
-  })
-  cells:NewSubset('interior', { { xn_bd, Cx-xn_bd-1 },
-                                { yn_bd, Cy-yn_bd-1 } })
+  cells:NewPartition(rectangles_2d(Cx, Cy, xn_bd, yn_bd))
 
   cells:NewFieldReadFunction('center', ebb (c)
     return L.vec2d({ xo + xw * (L.double(L.xid(c)) + 0.5),
@@ -245,11 +242,7 @@ local function setup2dVertices(grid)
                                  {0,1,y}}, v)                   end))
 
   -- Boundary/Interior subsets
-  verts:NewSubset('boundary', {
-    rectangles = boundary_rectangles_2d(Vx, Vy, xn_bd, yn_bd)
-  })
-  verts:NewSubset('interior', { { xn_bd, Vx-xn_bd-1 },
-                                { yn_bd, Vy-yn_bd-1 } })
+  verts:NewPartition(rectangles_2d(Vx, Vy, xn_bd, yn_bd))
 
   -- boundary depths
   verts:NewFieldMacro('xneg_depth', L.Macro(function(v)
@@ -519,18 +512,16 @@ end
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 
-local function boundary_rectangles_3d(X, Y, Z, xn_bd, yn_bd, zn_bd)
-  local rects = {}
-  if xn_bd > 0 then table.insert(rects, { {0,xn_bd-1},    {0,Y-1}, {0,Z-1} })
-                    table.insert(rects, { {X-xn_bd,X-1},  {0,Y-1}, {0,Z-1} })
-  end
-  if yn_bd > 0 then table.insert(rects, { {0,X-1},  {0,yn_bd-1},   {0,Z-1} })
-                    table.insert(rects, { {0,X-1},  {Y-yn_bd,Y-1}, {0,Z-1} })
-  end
-  if zn_bd > 0 then table.insert(rects, { {0,X-1},  {0,Y-1}, {0,zn_bd-1}   })
-                    table.insert(rects, { {0,X-1},  {0,Y-1}, {Z-zn_bd,Z-1} })
-  end
-  return rects
+local function rectangles_3d(X, Y, Z, xb, yb, zb)
+  return {
+    boundary_xneg = { {0,xb-1},    {0,Y-1},     {0,Z-1}     },
+    boundary_xpos = { {X-xb,X-1},  {0,Y-1},     {0,Z-1}     },
+    boundary_yneg = { {xb,X-xb-1}, {0,yb-1},    {0,Z-1}     },
+    boundary_ypos = { {xb,X-xb-1}, {Y-yb,Y-1},  {0,Z-1}     },
+    boundary_zneg = { {xb,X-xb-1}, {yb,Y-yb-1}, {0,zb-1}    },
+    boundary_zpos = { {xb,X-xb-1}, {yb,Y-yb-1}, {Z-zb,Z-1}  },
+    interior      = { {xb,X-xb-1}, {yb,Y-yb-1}, {zb,Z-zb-1} },
+  }
 end
 
 local function setup3dCells(grid)
@@ -549,12 +540,7 @@ local function setup3dCells(grid)
                                    {0,0,1,z}}, c)               end))
 
   -- Boundary/Interior subsets
-  cells:NewSubset('boundary', {
-    rectangles = boundary_rectangles_3d(Cx, Cy, Cz, xn_bd, yn_bd, zn_bd)
-  })
-  cells:NewSubset('interior', { { xn_bd, Cx-xn_bd-1 },
-                                { yn_bd, Cy-yn_bd-1 },
-                                { zn_bd, Cz-zn_bd-1 } })
+  cells:NewPartition(rectangles_3d(Cx, Cy, Cz, xn_bd, yn_bd, zn_bd))
 
   cells:NewFieldReadFunction('center', ebb(c)
     return L.vec3d({ xo + xw * (L.double(L.xid(c)) + 0.5),
@@ -696,12 +682,7 @@ local function setup3dVertices(grid)
                                    {0,0,1,z}}, v)               end))
 
   -- Boundary/Interior subsets
-  verts:NewSubset('boundary', {
-    rectangles = boundary_rectangles_3d(Vx, Vy, Vz, xn_bd, yn_bd, zn_bd)
-  })
-  verts:NewSubset('interior', { { xn_bd, Vx-xn_bd-1 },
-                                { yn_bd, Vy-yn_bd-1 },
-                                { zn_bd, Vz-zn_bd-1 } })
+  verts:NewPartition(rectangles_3d(Vx, Vy, Vz, xn_bd, yn_bd, zn_bd))
 
   -- boundary depths
   verts:NewFieldMacro('xneg_depth', L.Macro(function(v)
