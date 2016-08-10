@@ -1130,6 +1130,12 @@ function M.AST.While:toRQuote(ctxt)
     end
   end
 end
+function M.AST.Print:toRQuote(ctxt)
+  local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
+  return rquote
+    C.printf([self.fmt], [valRExprs])
+  end
+end
 
 -- ProgramContext -> RG.rexpr
 function M.AST.Cond:toRExpr(ctxt)

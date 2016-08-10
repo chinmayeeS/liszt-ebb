@@ -68,6 +68,7 @@ local ADT AST
        | LoadField { fld : Field, val : ExprConst }
        | SetGlobal { global : Global, expr : Expr }
        | While { cond : Cond, body : Stmt? }
+       | Print { fmt : string, vals : Expr* }
   Cond = Literal { val : boolean }
        | And { lhs : Cond, rhs : Cond }
        | Or { lhs : Cond, rhs : Cond }
@@ -205,4 +206,9 @@ function M.END()
   scopes[#scopes-1]:insert(wrapper)
   scopes[#scopes] = nil
   stack[#stack] = nil
+end
+
+-- string, AST.Expr* -> ()
+function M.PRINT(fmt, ...)
+  M.stmts():insert(AST.Print(fmt, terralib.newlist({...})))
 end
