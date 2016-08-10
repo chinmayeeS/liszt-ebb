@@ -481,8 +481,14 @@ function FunContext.New(info, argNames, argTypes)
       self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
     end
     if pt.reduceop then
-      self.privileges:insert(
-        RG.privilege(RG.reduces(pt.reduceop), rg, fld:Name()))
+      if pt.centered then
+        -- More liberal priviledges, but avoids copying.
+        self.privileges:insert(RG.privilege(RG.reads, rg, fld:Name()))
+        self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
+      else
+        self.privileges:insert(
+          RG.privilege(RG.reduces(pt.reduceop), rg, fld:Name()))
+      end
     end
   end
   -- Process global access modes
@@ -569,12 +575,13 @@ function AST.UserFunction:toTask(info)
   if info.domainRel then
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
+    -- local st __demand(__parallel) task st([ctxt:signature()]) where
     local task st([ctxt:signature()]) where
       dom <= univ, [ctxt.privileges]
     do [body] end
     tsk = st
   else
-    local task st([ctxt:signature()]) where
+    local st __demand(__inline) task st([ctxt:signature()]) where
       [ctxt.privileges]
     do [body] end
     tsk = st
@@ -1124,7 +1131,7 @@ function M.AST.SetGlobal:toRQuote(ctxt)
 end
 function M.AST.While:toRQuote(ctxt)
   return rquote
-    __demand(__spmd)
+    -- __demand(__spmd)
     while [self.cond:toRExpr(ctxt)] do
       [self.body:toRQuote(ctxt)]
     end
