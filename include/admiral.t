@@ -38,7 +38,7 @@ local RG  = regentlib
 local S   = require 'ebb.src.semant'
 local T   = require 'ebb.src.types'
 
-local DEBUG = true
+local DEBUG = false
 
 -------------------------------------------------------------------------------
 -- Helper functions
