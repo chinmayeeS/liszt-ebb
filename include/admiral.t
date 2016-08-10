@@ -115,6 +115,45 @@ local function opIdentity(op, T)
     assert(false)
 end
 
+-- string -> string
+local function opName(op)
+  return
+    (op == '+')   and 'add' or
+    (op == '-')   and 'sub' or
+    (op == '*')   and 'mul' or
+    (op == '/')   and 'div' or
+    (op == 'max') and 'max' or
+    (op == 'min') and 'min' or
+    assert(false)
+end
+
+-- (* -> *) -> ()
+local function prettyPrintFun(fun)
+  local raw = fun:prettystring(false)
+  local startIdx
+  for line in raw:gmatch('[^\n]+') do
+    if not startIdx then
+      local a,b = line:find('%S+')
+      startIdx = b + 2
+    end
+    print(line:sub(startIdx))
+  end
+end
+
+-- terralib.struct -> ()
+local function prettyPrintStruct(s)
+  print('struct '..s.name..' {')
+  for _,e in ipairs(s.entries) do
+    print('  '..e[1]..' : '..tostring(e[2])..';')
+  end
+  print('}')
+end
+
+-- string -> string
+local function idSanitize(s)
+  return s:gsub('[^%w]', '_')
+end
+
 -------------------------------------------------------------------------------
 -- Vector type support
 -------------------------------------------------------------------------------
@@ -126,6 +165,7 @@ local Vector = terralib.memoize(function(T, N)
   for i=0,N-1 do
     s.entries:insert({'_'..tostring(i), T})
   end
+  if DEBUG then prettyPrintStruct(s) end
   return s
 end)
 
@@ -141,7 +181,8 @@ local emitDotProduct = terralib.memoize(function(T, N)
   local terra dot([a], [b]) : T
     return [expr]
   end
-  if DEBUG then dot:printpretty(false) end
+  dot:setname('dot_'..tostring(T)..'_'..tostring(N))
+  if DEBUG then prettyPrintFun(dot) end
   return dot
 end)
 
@@ -161,7 +202,8 @@ local emitVectorVectorOp = terralib.memoize(function(op, T, N)
   local terra vvop([a], [b]) : Vector(T,N)
     return [Vector(T,N)]{[elems]}
   end
-  if DEBUG then vvop:printpretty(false) end
+  vvop:setname('vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
+  if DEBUG then prettyPrintFun(vvop) end
   return vvop
 end)
 
@@ -181,7 +223,8 @@ local emitVectorScalarOp = terralib.memoize(function(op, T, N)
   local terra vsop([a], [b]) : Vector(T,N)
     return [Vector(T,N)]{[elems]}
   end
-  if DEBUG then vsop:printpretty(false) end
+  vsop:setname('vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
+  if DEBUG then prettyPrintFun(vsop) end
   return vsop
 end)
 
@@ -333,7 +376,7 @@ R.Relation.fieldSpace = terralib.memoize(function(self)
   for _,fld in ipairs(self:Fields()) do
     fs.entries:insert({fld:Name(), toRType(fld:Type())})
   end
-  if DEBUG then fs:printpretty() end
+  if DEBUG then prettyPrintStruct(fs) end
   return fs
 end)
 
@@ -446,7 +489,7 @@ function FunContext.New(info, argNames, argTypes)
   for g,pt in pairs(info.global_use) do
     if pt.read and not pt.reduceop then
       assert(not self.globalMap[g])
-      self.globalMap[g] = RG.newsymbol(toRType(g:Type()), g:Name())
+      self.globalMap[g] = RG.newsymbol(toRType(g:Type()), idSanitize(g:Name()))
       self.readGlobals:insert(g)
     elseif pt.reduceop and not pt.read then
       assert(not self.reducedGlobal)
@@ -492,6 +535,8 @@ function FunContext:signature()
   return fullArgs
 end
 
+local taskNameCache = {} -- map(string, RG.task)
+
 -- FunInfo -> RG.task, FunContext
 function AST.UserFunction:toTask(info)
   -- self.params : AST.Symbol*
@@ -535,8 +580,13 @@ function AST.UserFunction:toTask(info)
     tsk = st
   end
   -- Finalize task
-  tsk:setname(info.name)
-  tsk.ast.name[1] = info.name -- TODO: Dangerous
+  local name = idSanitize(info.name)
+  while taskNameCache[name] do
+    name = name..'_'
+  end
+  taskNameCache[name] = tsk
+  tsk:setname(name)
+  tsk.ast.name[1] = name -- TODO: Dangerous
   if DEBUG then tsk:printpretty() end
   return tsk, ctxt
 end
@@ -560,10 +610,6 @@ function F.Function:toKernelTask()
   -- }
   info.name = self:Name()
   info.domainRel = argRel
-  if DEBUG then
-    print(self:Name())
-    typedAST:pretty_print()
-  end
   local tsk, ctxt = typedAST:toTask(info)
   toKernelTask_cache[self] = {tsk, ctxt}
   return tsk, ctxt
@@ -588,10 +634,6 @@ function F.Function:toHelperTask(argTypes, callerDom)
   info.name = self:Name()
   info.domainRel = nil
   typedAST.ptypes = argTypes
-  if DEBUG then
-    print(self:Name())
-    typedAST:pretty_print()
-  end
   local tsk, ctxt = typedAST:toTask(info)
   toHelperTask_cache[self] = {tsk, ctxt}
   return tsk, ctxt
@@ -1152,6 +1194,7 @@ function M.AST.UnaryOp:toRExpr(ctxt, typ)
 end
 
 function A.translateAndRun()
+  if DEBUG then print('import "regent"') end
   local stmts = terralib.newlist()
   local ctxt = { -- ProgramContext
     globalMap  = {}, -- map(L.Global, RG.symbol)
@@ -1176,7 +1219,7 @@ function A.translateAndRun()
   end
   -- Emit global declarations
   for g,val in pairs(globalInits) do
-    local x = RG.newsymbol(toRType(g:Type()), g:Name())
+    local x = RG.newsymbol(toRType(g:Type()), idSanitize(g:Name()))
     ctxt.globalMap[g] = x
     stmts:insert(rquote var [x] = [toRConst(val, g:Type())] end)
   end
@@ -1221,7 +1264,7 @@ function A.translateAndRun()
         var [p] = partition(disjoint, rg, coloring, colors)
       end)
       for i,subset in ipairs(part) do
-        local subrg = RG.newsymbol(nil, subset:FullName())
+        local subrg = RG.newsymbol(nil, idSanitize(subset:FullName()))
         ctxt.subsetMap[subset] = subrg
         stmts:insert(rquote
           var [subrg] = p[i-1]
@@ -1240,6 +1283,10 @@ function A.translateAndRun()
   local task main()
     [stmts]
   end
-  if DEBUG then main:printpretty() end
+  assert(not taskNameCache['main'])
+  if DEBUG then
+    main:printpretty()
+    print('regentlib.start(main)')
+  end
   RG.start(main)
 end
