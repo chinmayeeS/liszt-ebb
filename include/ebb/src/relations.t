@@ -389,18 +389,27 @@ function Relation:NewPartition( rects )
     if not type(rect) == 'table' or not terralib.israwlist(rect) then
       error("NewPartition(): Rectangles must be lists", 2)
     end
-    if not is_subrectangle(self, rect) then
-      error("NewPartition(): Rectangle was not a list of "..(#self:Dims())..
-            " range pairs lying inside the grid", 2)
+    if is_subrectangle(self, rect) then
+      local subset = setmetatable({
+        _owner     = self,
+        _name      = name,
+        _rectangle = rect,
+      }, Subset)
+      rawset(self, name, subset)
+      partition:insert(subset)
     end
-    -- TODO: Assuming the rectangles are disjoint, and cover the entire grid.
-    local subset = setmetatable({
-      _owner     = self,
-      _name      = name,
-      _rectangle = rect,
-    }, Subset)
-    rawset(self, name, subset)
-    partition:insert(subset)
+    --if not is_subrectangle(self, rect) then
+    --  error("NewPartition(): Rectangle was not a list of "..(#self:Dims())..
+    --        " range pairs lying inside the grid", 2)
+    --end
+    ---- TODO: Assuming the rectangles are disjoint, and cover the entire grid.
+    --local subset = setmetatable({
+    --  _owner     = self,
+    --  _name      = name,
+    --  _rectangle = rect,
+    --}, Subset)
+    --rawset(self, name, subset)
+    --partition:insert(subset)
   end
   self._partitions:insert(partition)
   M.decls():insert(M.AST.NewPartition(partition))
