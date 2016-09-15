@@ -16,14 +16,6 @@ Quickstart
   export LEGION_PATH=<legion-dir>
   ```
 
-* Install and patch Terra:
-  ```
-  cd <legion-dir>/language
-  git clone https://github.com/zdevito/terra.git terra
-  cd terra
-  git apply <liszt-dir>/terra.patch
-  ```
-
 * Build Regent (Legion's front-end language):
   ```
   cd <legion-dir>/language
