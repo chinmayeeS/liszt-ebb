@@ -575,8 +575,7 @@ function AST.UserFunction:toTask(info)
   if info.domainRel then
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
-    -- local st __demand(__parallel) task st([ctxt:signature()]) where
-    local task st([ctxt:signature()]) where
+    local st __demand(__parallel) task st([ctxt:signature()]) where
       dom <= univ, [ctxt.privileges]
     do [body] end
     tsk = st
@@ -1130,10 +1129,18 @@ function M.AST.SetGlobal:toRQuote(ctxt)
   end
 end
 function M.AST.While:toRQuote(ctxt)
-  return rquote
-    -- __demand(__spmd)
-    while [self.cond:toRExpr(ctxt)] do
-      [self.body:toRQuote(ctxt)]
+  if self.spmd then
+    return rquote
+      __demand(__spmd)
+      while [self.cond:toRExpr(ctxt)] do
+        [self.body:toRQuote(ctxt)]
+      end
+    end
+  else
+    return rquote
+      while [self.cond:toRExpr(ctxt)] do
+        [self.body:toRQuote(ctxt)]
+      end
     end
   end
 end

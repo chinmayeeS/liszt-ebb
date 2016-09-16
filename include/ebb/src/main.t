@@ -67,7 +67,7 @@ local ADT AST
        | If { cond : Cond, thenBlock : Stmt?, elseBlock : Stmt? }
        | LoadField { fld : Field, val : ExprConst }
        | SetGlobal { global : Global, expr : Expr }
-       | While { cond : Cond, body : Stmt? }
+       | While { cond : Cond, spmd : boolean, body : Stmt? }
        | Print { fmt : string, vals : Expr* }
   Cond = Literal { val : boolean }
        | And { lhs : Cond, rhs : Cond }
@@ -182,9 +182,9 @@ function M.ELSE()
 end
 
 -- boolean | AST.Cond -> ()
-function M.WHILE(cond)
+function M.WHILE(cond, spmd)
   if type(cond) == 'boolean' then cond = AST.Literal(cond) end
-  stack:insert(AST.While(cond, nil))
+  stack:insert(AST.While(cond, spmd, nil))
   scopes:insert(terralib.newlist())
 end
 
