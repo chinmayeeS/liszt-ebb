@@ -1126,7 +1126,7 @@ function M.AST.LoadField:toRQuote(ctxt)
 end
 function M.AST.SetGlobal:toRQuote(ctxt)
   return rquote
-    [ctxt.globalMap[self.global]] = [self.expr:toRExpr(ctxt, self.global:Type())]
+    [ctxt.globalMap[self.global]] = [self.expr:toRExpr(ctxt)]
   end
 end
 function M.AST.While:toRQuote(ctxt)
@@ -1173,24 +1173,20 @@ function M.AST.Compare:toRExpr(ctxt)
     assert(false)
 end
 
--- ProgramContext, T.Type? -> RG.rexpr
-function M.AST.Expr:toRExpr(ctxt, typ)
+-- ProgramContext -> RG.rexpr
+function M.AST.Expr:toRExpr(ctxt)
   error('Abstract method')
 end
-function M.AST.Const:toRExpr(ctxt, typ)
-  return rexpr [toRConst(self.val, typ)] end
+function M.AST.Const:toRExpr(ctxt)
+  return rexpr [toRConst(self.val)] end
 end
-function M.AST.GetGlobal:toRExpr(ctxt, typ)
+function M.AST.GetGlobal:toRExpr(ctxt)
   local globSym = assert(ctxt.globalMap[self.global])
-  if typ then
-    return rexpr [toRType(typ)](globSym) end
-  else
-    return rexpr globSym end
-  end
+  return rexpr globSym end
 end
-function M.AST.BinaryOp:toRExpr(ctxt, typ)
-  local a = self.lhs:toRExpr(ctxt, typ)
-  local b = self.rhs:toRExpr(ctxt, typ)
+function M.AST.BinaryOp:toRExpr(ctxt)
+  local a = self.lhs:toRExpr(ctxt)
+  local b = self.rhs:toRExpr(ctxt)
   return
     (self.op == '+') and rexpr a + b end or
     (self.op == '-') and rexpr a - b end or
@@ -1199,8 +1195,8 @@ function M.AST.BinaryOp:toRExpr(ctxt, typ)
     (self.op == '%') and rexpr a % b end or
     assert(false)
 end
-function M.AST.UnaryOp:toRExpr(ctxt, typ)
-  local a = self.arg:toRExpr(ctxt, typ)
+function M.AST.UnaryOp:toRExpr(ctxt)
+  local a = self.arg:toRExpr(ctxt)
   return
     (self.op == '-') and rexpr -a end or
     assert(false)
