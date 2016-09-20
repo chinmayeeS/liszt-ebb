@@ -1304,5 +1304,11 @@ function A.translateAndRun()
     main:printpretty()
     print('regentlib.start(main)')
   end
-  RG.start(main)
+  if os.getenv('SAVEOBJ') == '1' then
+    local objName = os.getenv('OBJNAME') or arg[0]:match("^.+/(.+)$"):match("^[^.]+")
+    print('Saving executable to '..objName)
+    RG.saveobj(main, objName, 'executable', nil, {'-lm'})
+  else
+    RG.start(main)
+  end
 end
