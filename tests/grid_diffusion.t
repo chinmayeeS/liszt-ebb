@@ -37,9 +37,9 @@ local grid = GRID.NewGrid2d{
                periodic_boundary = {false, true},
              }
 
-grid.cells:NewField('f', L.double):Load(0)
-grid.cells:NewField('f_new', L.double):Load(0.5)
-grid.cells:NewField('v', L.vec3d):Load({0.1, 0.7, 1.5})
+grid.cells:NewField('f', L.double):Fill(0)
+grid.cells:NewField('f_new', L.double):Fill(0.5)
+grid.cells:NewField('v', L.vec3d):Fill({0.1, 0.7, 1.5})
 
 local timestep    = L.Constant(L.double, 0.45)
 local conduction  = L.Constant(L.double, 1.0)

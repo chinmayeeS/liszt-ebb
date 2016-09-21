@@ -507,9 +507,9 @@ end
 -------------------------------------------------------------------------------
 --[[  High-Level Loading and Dumping Operations (Lua and Terra)            ]]--
 
-function Field:Load(val)
+function Field:Fill(val)
   if not T.luaValConformsToType(val, self._type) then
     error('Value to be loaded does not match field type', 2)
   end
-  M.stmts():insert(M.AST.LoadField(self, val))
+  M.stmts():insert(M.AST.FillField(self, val))
 end

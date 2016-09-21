@@ -1132,7 +1132,7 @@ function M.AST.If:toRQuote(ctxt)
     end
   end
 end
-function M.AST.LoadField:toRQuote(ctxt)
+function M.AST.FillField:toRQuote(ctxt)
   local relSym = ctxt.relMap[self.fld:Relation()]
   return rquote
     fill(relSym.[self.fld:Name()], [toRConst(self.val, self.fld:Type())])

@@ -65,7 +65,7 @@ local ADT AST
   Stmt = Block { stmts : Stmt* }
        | ForEach { fun : Function, rel : Relation, subset : Subset? }
        | If { cond : Cond, thenBlock : Stmt?, elseBlock : Stmt? }
-       | LoadField { fld : Field, val : ExprConst }
+       | FillField { fld : Field, val : ExprConst }
        | SetGlobal { global : Global, expr : Expr }
        | While { cond : Cond, spmd : boolean, body : Stmt? }
        | Print { fmt : string, vals : Expr* }
