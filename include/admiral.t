@@ -820,12 +820,14 @@ function AST.Call:toRExpr(ctxt)
     if N == 2 then
       local x = mat[1][3]
       local y = mat[2][3]
-      return rexpr (base + {x,y}) % [ctxt.relMap[rel]].bounds end
+      if x == 0 and y == 0 then return base
+      else return rexpr (base + {x,y}) % [ctxt.relMap[rel]].bounds end end
     elseif N == 3 then
       local x = mat[1][4]
       local y = mat[2][4]
       local z = mat[3][4]
-      return rexpr (base + {x,y,z}) % [ctxt.relMap[rel]].bounds end
+      if x == 0 and y == 0 and z == 0 then return base
+      else return rexpr (base + {x,y,z}) % [ctxt.relMap[rel]].bounds end end
     else assert(false) end
   end
   -- Assertion
