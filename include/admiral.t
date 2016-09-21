@@ -1151,7 +1151,7 @@ if exists('/usr/include/hdf5/serial') then
   hdf5Lib = '-lhdf_serial'
 else
   hdf5Hdr = 'hdf5.h'
-  hdf5Lib = '-lhdf'
+  hdf5Lib = '-L/usr/lib/x86_64-linux-gnu -lhdf'
 end
 
 local HDF5 = terralib.includec(hdf5Hdr)
