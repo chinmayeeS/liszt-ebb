@@ -1110,7 +1110,7 @@ if exists('/usr/include/hdf5/serial') then
   hdf5Hdr = 'hdf5/serial/hdf5.h'
   hdf5Lib = '-lhdf_serial'
 else
-  hdf5Hdr = 'hdf5/serial/hdf5.h'
+  hdf5Hdr = 'hdf5.h'
   hdf5Lib = '-lhdf'
 end
 
