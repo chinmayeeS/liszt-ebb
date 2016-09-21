@@ -212,12 +212,13 @@ end
 -- terralib.type, int -> terralib.type
 local Vector = terralib.memoize(function(T, N)
   local name = 'Vec'..tostring(N)..tostring(T)
-  local s = terralib.types.newstruct(name)
-  for i=0,N-1 do
-    s.entries:insert({field='_'..tostring(i), type=T})
-  end
-  if DEBUG then prettyPrintStruct(s) end
-  return s
+  --local s = terralib.types.newstruct(name)
+  --for i=0,N-1 do
+  --  s.entries:insert({field='_'..tostring(i), type=T})
+  --end
+  --if DEBUG then prettyPrintStruct(s) end
+  --return s
+  return T[N]
 end)
 
 -- T:terralib.type, N:int -> (Vector(T,N), Vector(T,N) -> T)
@@ -225,9 +226,13 @@ local emitDotProduct = terralib.memoize(function(T, N)
   local a = symbol(Vector(T,N), 'a')
   local b = symbol(Vector(T,N), 'b')
   local elems = terralib.newlist()
-  local expr = `0
-  for i=0,N-1 do
-    expr = `expr + (a.['_'..i] * b.['_'..i])
+  --local expr = `0
+  --for i=0,N-1 do
+  --  expr = `expr + (a.['_'..i] * b.['_'..i])
+  --end
+  local expr = `(a[0] * b[0])
+  for i=1,N-1 do
+    expr = `expr + (a[ [i] ] * b[ [i] ])
   end
   local terra dot([a], [b]) : T
     return [expr]
@@ -242,16 +247,25 @@ local emitVectorVectorOp = terralib.memoize(function(op, T, N)
   local a = symbol(Vector(T,N), 'a')
   local b = symbol(Vector(T,N), 'b')
   local elems = terralib.newlist()
+  --for i=0,N-1 do
+  --  elems:insert((op == '+') and (`a.['_'..i] + b.['_'..i]) or
+  --               (op == '-') and (`a.['_'..i] - b.['_'..i]) or
+  --               (op == '*') and (`a.['_'..i] * b.['_'..i]) or
+  --               (op == '/') and (`a.['_'..i] / b.['_'..i]) or
+  --               (op == '%') and (`a.['_'..i] % b.['_'..i]) or
+  --               assert(false))
+  --end
   for i=0,N-1 do
-    elems:insert((op == '+') and (`a.['_'..i] + b.['_'..i]) or
-                 (op == '-') and (`a.['_'..i] - b.['_'..i]) or
-                 (op == '*') and (`a.['_'..i] * b.['_'..i]) or
-                 (op == '/') and (`a.['_'..i] / b.['_'..i]) or
-                 (op == '%') and (`a.['_'..i] % b.['_'..i]) or
+    elems:insert((op == '+') and (`a[ [i] ] + b[ [i] ]) or
+                 (op == '-') and (`a[ [i] ] - b[ [i] ]) or
+                 (op == '*') and (`a[ [i] ] * b[ [i] ]) or
+                 (op == '/') and (`a[ [i] ] / b[ [i] ]) or
+                 (op == '%') and (`a[ [i] ] % b[ [i] ]) or
                  assert(false))
   end
   local terra vvop([a], [b]) : Vector(T,N)
-    return [Vector(T,N)]{[elems]}
+    --return [Vector(T,N)]{[elems]}
+    return array([elems])
   end
   setFunName(vvop, 'vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   if DEBUG then prettyPrintFun(vvop) end
@@ -263,16 +277,25 @@ local emitVectorScalarOp = terralib.memoize(function(op, T, N)
   local a = symbol(Vector(T,N), 'a')
   local b = symbol(T, 'b')
   local elems = terralib.newlist()
+  --for i=0,N-1 do
+  --  elems:insert((op == '+') and (`a.['_'..i] + b) or
+  --               (op == '-') and (`a.['_'..i] - b) or
+  --               (op == '*') and (`a.['_'..i] * b) or
+  --               (op == '/') and (`a.['_'..i] / b) or
+  --               (op == '%') and (`a.['_'..i] % b) or
+  --               assert(false))
+  --end
   for i=0,N-1 do
-    elems:insert((op == '+') and (`a.['_'..i] + b) or
-                 (op == '-') and (`a.['_'..i] - b) or
-                 (op == '*') and (`a.['_'..i] * b) or
-                 (op == '/') and (`a.['_'..i] / b) or
-                 (op == '%') and (`a.['_'..i] % b) or
+    elems:insert((op == '+') and (`a[ [i] ] + b) or
+                 (op == '-') and (`a[ [i] ] - b) or
+                 (op == '*') and (`a[ [i] ] * b) or
+                 (op == '/') and (`a[ [i] ] / b) or
+                 (op == '%') and (`a[ [i] ] % b) or
                  assert(false))
   end
   local terra vsop([a], [b]) : Vector(T,N)
-    return [Vector(T,N)]{[elems]}
+    --return [Vector(T,N)]{[elems]}
+    return array([elems])
   end
   setFunName(vsop, 'vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   if DEBUG then prettyPrintFun(vsop) end
@@ -281,7 +304,8 @@ end)
 
 -- terralib.type, RG.rexpr* -> RG.rexpr
 local function emitVectorCtor(T, elems)
-  return rexpr [Vector(T,#elems)]{[elems]} end
+  --return rexpr [Vector(T,#elems)]{[elems]} end
+  return rexpr array([elems]) end
 end
 
 -------------------------------------------------------------------------------
@@ -371,18 +395,31 @@ end
 local function emitReduce(op, typ, lval, exp)
   if typ:isvector() then
     local tmp = RG.newsymbol(toRType(typ), 'tmp')
+    local v = RG.newsymbol(toRType(typ), 'v')
     local stmts = terralib.newlist()
     stmts:insert(rquote var [tmp] = exp end)
+    stmts:insert(rquote var [v] = lval end)
+    --for i=0,typ.N-1 do
+    --  stmts:insert(
+    --    (op == '+')   and rquote lval.['_'..i] +=   tmp.['_'..i] end or
+    --    (op == '-')   and rquote lval.['_'..i] -=   tmp.['_'..i] end or
+    --    (op == '*')   and rquote lval.['_'..i] *=   tmp.['_'..i] end or
+    --    (op == '/')   and rquote lval.['_'..i] /=   tmp.['_'..i] end or
+    --    (op == 'max') and rquote lval.['_'..i] max= tmp.['_'..i] end or
+    --    (op == 'min') and rquote lval.['_'..i] min= tmp.['_'..i] end or
+    --    assert(false))
+    --end
     for i=0,typ.N-1 do
       stmts:insert(
-        (op == '+')   and rquote lval.['_'..i] +=   tmp.['_'..i] end or
-        (op == '-')   and rquote lval.['_'..i] -=   tmp.['_'..i] end or
-        (op == '*')   and rquote lval.['_'..i] *=   tmp.['_'..i] end or
-        (op == '/')   and rquote lval.['_'..i] /=   tmp.['_'..i] end or
-        (op == 'max') and rquote lval.['_'..i] max= tmp.['_'..i] end or
-        (op == 'min') and rquote lval.['_'..i] min= tmp.['_'..i] end or
+        (op == '+')   and rquote v[ [i] ] +=   tmp[ [i] ] end or
+        (op == '-')   and rquote v[ [i] ] -=   tmp[ [i] ] end or
+        (op == '*')   and rquote v[ [i] ] *=   tmp[ [i] ] end or
+        (op == '/')   and rquote v[ [i] ] /=   tmp[ [i] ] end or
+        (op == 'max') and rquote v[ [i] ] max= tmp[ [i] ] end or
+        (op == 'min') and rquote v[ [i] ] min= tmp[ [i] ] end or
         assert(false))
     end
+    stmts:insert(rquote lval = v end)
     return rquote [stmts] end
   end
   return
@@ -399,7 +436,8 @@ end
 local function emitIndexExpr(base, index)
   assert(index:is(AST.Number))
   assert(index.node_type == L.int)
-  return rexpr base.['_'..index.value] end
+  --return rexpr base.['_'..index.value] end
+  return rexpr base[ [index.value] ] end
 end
 
 -------------------------------------------------------------------------------
