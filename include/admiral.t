@@ -154,6 +154,29 @@ local function idSanitize(s)
   return s:gsub('[^%w]', '_')
 end
 
+local nameCache = {} -- map(string, (* -> *) | RG.task)
+
+-- RG.task, string -> ()
+local function setTaskName(tsk, name)
+  name = idSanitize(name)
+  while nameCache[name] do
+    name = name..'_'
+  end
+  nameCache[name] = tsk
+  tsk:setname(name)
+  tsk.ast.name[1] = name -- TODO: Dangerous
+end
+
+-- (* -> *), string -> ()
+local function setFunName(fun, name)
+  name = idSanitize(name)
+  while nameCache[name] do
+    name = name..'_'
+  end
+  nameCache[name] = fun
+  fun:setname(name)
+end
+
 -------------------------------------------------------------------------------
 -- Vector type support
 -------------------------------------------------------------------------------
@@ -181,7 +204,7 @@ local emitDotProduct = terralib.memoize(function(T, N)
   local terra dot([a], [b]) : T
     return [expr]
   end
-  dot:setname('dot_'..tostring(T)..'_'..tostring(N))
+  setFunName(dot, 'dot_'..tostring(T)..'_'..tostring(N))
   if DEBUG then prettyPrintFun(dot) end
   return dot
 end)
@@ -202,7 +225,7 @@ local emitVectorVectorOp = terralib.memoize(function(op, T, N)
   local terra vvop([a], [b]) : Vector(T,N)
     return [Vector(T,N)]{[elems]}
   end
-  vvop:setname('vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
+  setFunName(vvop, 'vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   if DEBUG then prettyPrintFun(vvop) end
   return vvop
 end)
@@ -223,7 +246,7 @@ local emitVectorScalarOp = terralib.memoize(function(op, T, N)
   local terra vsop([a], [b]) : Vector(T,N)
     return [Vector(T,N)]{[elems]}
   end
-  vsop:setname('vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
+  setFunName(vsop, 'vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   if DEBUG then prettyPrintFun(vsop) end
   return vsop
 end)
@@ -541,8 +564,6 @@ function FunContext:signature()
   return fullArgs
 end
 
-local taskNameCache = {} -- map(string, RG.task)
-
 -- FunInfo -> RG.task, FunContext
 function AST.UserFunction:toTask(info)
   -- self.params : AST.Symbol*
@@ -586,13 +607,7 @@ function AST.UserFunction:toTask(info)
     tsk = st
   end
   -- Finalize task
-  local name = idSanitize(info.name)
-  while taskNameCache[name] do
-    name = name..'_'
-  end
-  taskNameCache[name] = tsk
-  tsk:setname(name)
-  tsk.ast.name[1] = name -- TODO: Dangerous
+  setTaskName(tsk, info.name)
   if DEBUG then tsk:printpretty() end
   return tsk, ctxt
 end
@@ -1299,13 +1314,14 @@ function A.translateAndRun()
   local task main()
     [stmts]
   end
-  assert(not taskNameCache['main'])
+  setTaskName(main, 'main')
   if DEBUG then
     main:printpretty()
-    print('regentlib.start(main)')
+    print('regentlib.start('..main:getname()[1]..')')
   end
   if os.getenv('SAVEOBJ') == '1' then
-    local objName = os.getenv('OBJNAME') or arg[0]:match("^.+/(.+)$"):match("^[^.]+")
+    local objName = os.getenv('OBJNAME')
+      or arg[0]:match("^.+/(.+)$"):match("^[^.]+")
     print('Saving executable to '..objName)
     RG.saveobj(main, objName, 'executable', nil, {'-lm'})
   else
