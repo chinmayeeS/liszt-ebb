@@ -1,6 +1,11 @@
 Quickstart
 ==========
 
+* Install required packages:
+  ```
+  sudo apt-get install libhdf5-dev
+  ```
+
 * Clone Liszt-Legion (this repo):
   ```
   git clone https://github.com/manopapad/liszt-legion.git <liszt-dir>
@@ -17,12 +22,20 @@ Quickstart
   ```
 
 * Build Regent (Legion's front-end language):
-  ```
-  cd <legion-dir>/language
-  ./install.py
-  ```
 
-* Add at the bottom your Liszt source file:
+  - If you're running Debian 8 / Ubuntu 14.04 or older:
+    ```
+    cd <legion-dir>/language
+    ./install.py --hdf
+    ```
+
+  - Otherwise:
+    ```
+    cd <legion-dir>/language
+    HDF_LIBNAME=hdf5_serial ./install.py --hdf
+    ```
+
+* Add to the bottom your Liszt source file:
   ```
   (require 'admiral').translateAndRun()
   ```

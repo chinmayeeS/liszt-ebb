@@ -69,6 +69,8 @@ local ADT AST
        | SetGlobal { global : Global, expr : Expr }
        | While { cond : Cond, spmd : boolean, body : Stmt? }
        | Print { fmt : string, vals : Expr* }
+       | Dump { rel : Relation, file : string, flds : string* }
+       | Load { rel : Relation, file : string, flds : string* }
   Cond = Literal { val : boolean }
        | And { lhs : Cond, rhs : Cond }
        | Or { lhs : Cond, rhs : Cond }
