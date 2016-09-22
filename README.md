@@ -44,3 +44,12 @@ Quickstart
   ```
   <liszt-dir>/liszt-legion.sh <liszt-source>
   ```
+
+* Alternatively, you can compile your Liszt program into a binary:
+  ```
+  SAVEOBJ=1 OBJNAME=<executable> <liszt-dir>/liszt-legion.sh <liszt-source>
+  ```
+  You can run the output binary as follows:
+  ```
+  LD_LIBRARY_PATH=<legion-dir>/bindings/terra/ <executable>
+  ```
