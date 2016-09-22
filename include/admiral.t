@@ -1107,7 +1107,7 @@ end
 local hdf5hdr, hdf5lib
 if exists('/usr/include/hdf5/serial') then
   hdf5Hdr = 'hdf5/serial/hdf5.h'
-  hdf5Lib = '-lhdf_serial'
+  hdf5Lib = '-lhdf5_serial'
 else
   hdf5Hdr = 'hdf5.h'
   hdf5Lib = '-L/usr/lib/x86_64-linux-gnu -lhdf'
