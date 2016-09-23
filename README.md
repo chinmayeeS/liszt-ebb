@@ -16,7 +16,7 @@ Quickstart
   git clone -b master https://github.com/StanfordLegion/legion.git <legion-dir>
   ```
 
-* Add to your `~/bashrc`:
+* Add to your `~/.bashrc`:
   ```
   export LEGION_PATH=<legion-dir>
   ```
