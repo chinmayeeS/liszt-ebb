@@ -136,8 +136,16 @@ local function prettyPrintFun(fun)
       local a,b = line:find('%S+')
       startIdx = b + 2
     end
-    print(line:sub(startIdx))
+    if not line:find('debuginfo') then
+      print(line:sub(startIdx))
+    end
   end
+end
+
+-- RG.Task -> ()
+local function prettyPrintTask(tsk)
+  tsk:printpretty()
+  prettyPrintFun(tsk:getdefinition())
 end
 
 -- terralib.struct -> ()
@@ -633,7 +641,7 @@ function AST.UserFunction:toTask(info)
   end
   -- Finalize task
   setTaskName(tsk, info.name)
-  if DEBUG then tsk:printpretty() end
+  if DEBUG then prettyPrintTask(tsk) end
   return tsk, ctxt
 end
 
@@ -1215,8 +1223,8 @@ function R.Relation:emitDump(flds)
   setTaskName(dump, self:Name()..'_hdf5dump_'..flds:toString('_'))
   if DEBUG then
     prettyPrintFun(create)
-    reallyDump:printpretty()
-    dump:printpretty()
+    prettyPrintTask(reallyDump)
+    prettyPrintTask(dump)
   end
   return dump
 end
@@ -1237,9 +1245,7 @@ function R.Relation:emitLoad(flds)
     detach(hdf5, s.[flds])
   end
   setTaskName(load, self:Name()..'_hdf5load_'..flds:toString('_'))
-  if DEBUG then
-    load:printpretty()
-  end
+  if DEBUG then prettyPrintTask(load) end
   return load
 end
 
@@ -1500,7 +1506,7 @@ function A.translateAndRun()
   end
   setTaskName(main, 'main')
   if DEBUG then
-    main:printpretty()
+    prettyPrintTask(main)
     print('regentlib.start('..main:getname()[1]..')')
   end
   if os.getenv('SAVEOBJ') == '1' then
