@@ -1366,21 +1366,29 @@ end
 function M.AST.Print:toRQuote(ctxt)
   local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
   return rquote
-    C.printf([self.fmt], [valRExprs])
+    C.printf([self.fmt], valRExprs)
   end
 end
 function M.AST.Dump:toRQuote(ctxt)
   local dump = self.rel:emitDump(self.flds)
   local relSym = ctxt.relMap[self.rel]
+  local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
   return rquote
-    dump(relSym, [self.file])
+    var filename = [rawstring](C.malloc(256))
+    C.snprintf(filename, 256, [self.file], valRExprs)
+    dump(relSym, filename)
+    C.free(filename)
   end
 end
 function M.AST.Load:toRQuote(ctxt)
   local load = self.rel:emitLoad(self.flds)
   local relSym = ctxt.relMap[self.rel]
+  local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
   return rquote
-    load(relSym, [self.file])
+    var filename = [rawstring](C.malloc(256))
+    C.snprintf(filename, 256, [self.file], valRExprs)
+    load(relSym, filename)
+    C.free(filename)
   end
 end
 

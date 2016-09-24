@@ -514,10 +514,12 @@ function Field:Fill(val)
   M.stmts():insert(M.AST.FillField(self, val))
 end
 
-function Relation:Dump(file, flds)
-  M.stmts():insert(M.AST.Dump(self, file, terralib.newlist(flds)))
+function Relation:Dump(flds, file, ...)
+  M.stmts():insert(M.AST.Dump(self, terralib.newlist(flds),
+                              file, terralib.newlist({...})))
 end
 
-function Relation:Load(file, flds)
-  M.stmts():insert(M.AST.Load(self, file, terralib.newlist(flds)))
+function Relation:Load(flds, file, ...)
+  M.stmts():insert(M.AST.Load(self, terralib.newlist(flds),
+                              file, terralib.newlist({...})))
 end
