@@ -213,6 +213,15 @@ function TerraList:toString(sep)
   return res
 end
 
+-- () -> T*
+function TerraList:reverse()
+  local res = terralib.newlist()
+  for elem = #self, 1, -1 do
+    res:insert(self[elem])
+  end
+  return res
+end
+
 -------------------------------------------------------------------------------
 -- Vector type support
 -------------------------------------------------------------------------------
@@ -1135,9 +1144,9 @@ function R.Relation:emitDump(flds)
   local isType = self:indexSpaceType()
   local fs = self:fieldSpace()
   local terra create(filename : rawstring)
-    var fid = HDF5.H5Fcreate(filename, HDF5.H5F_ACC_TRUNC,
-                             HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
-    var sizes : HDF5.hsize_t[ nDims ]
+    var file = HDF5.H5Fcreate(filename, HDF5.H5F_ACC_TRUNC,
+                              HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
+    var sizes : HDF5.hsize_t[nDims]
     escape
       if #dims == 1 then
         emit quote
@@ -1156,49 +1165,73 @@ function R.Relation:emitDump(flds)
         end
       else assert(false) end
     end
-    var did = HDF5.H5Screate_simple([#dims], sizes, [&uint64](0))
+    var dataSpace = HDF5.H5Screate_simple([#dims], sizes, [&uint64](0))
     escape
-      local quotes = terralib.newlist()
+      local header = terralib.newlist() -- terralib.quote*
+      local footer = terralib.newlist() -- terralib.quote*
+      -- terralib.type -> terralib.quote
+      local function toHType(T)
+        -- TODO: Not supporting: pointers, vectors, non-primitive arrays
+        if T:isprimitive() then
+          return
+            -- HACK: Hardcoding missing #define's
+            (T == int)    and HDF5.H5T_STD_I32LE_g  or
+            (T == int8)   and HDF5.H5T_STD_I8LE_g   or
+            (T == int16)  and HDF5.H5T_STD_I16LE_g  or
+            (T == int32)  and HDF5.H5T_STD_I32LE_g  or
+            (T == int64)  and HDF5.H5T_STD_I64LE_g  or
+            (T == uint)   and HDF5.H5T_STD_U32LE_g  or
+            (T == uint8)  and HDF5.H5T_STD_U8LE_g   or
+            (T == uint16) and HDF5.H5T_STD_U16LE_g  or
+            (T == uint32) and HDF5.H5T_STD_U32LE_g  or
+            (T == uint64) and HDF5.H5T_STD_U64LE_g  or
+            (T == bool)   and HDF5.H5T_STD_U8LE_g   or
+            (T == float)  and HDF5.H5T_IEEE_F32LE_g or
+            (T == double) and HDF5.H5T_IEEE_F64LE_g or
+            assert(false)
+        elseif T:isarray() then
+          local elemType = toHType(T.type)
+          local arrayType = symbol(HDF5.hid_t, 'arrayType')
+          header:insert(quote
+            var dims : HDF5.hsize_t[1]
+            dims[0] = T.N
+            var [arrayType] = HDF5.H5Tarray_create2(elemType, 1, dims)
+          end)
+          footer:insert(quote
+            HDF5.H5Tclose(arrayType)
+          end)
+          return arrayType
+        else assert(false) end
+      end
       -- terralib.struct, set(string), string -> ()
       local function mkFieldDecls(fs, whitelist, prefix)
          -- TODO: Only supporting pure structs, not fspaces
         assert(fs:isstruct())
         for _,fld in ipairs(fs.entries) do
           if whitelist and not whitelist[fld.field] then
-          -- TODO: Not supporting fields of pointer, array or vector type
-          elseif fld.type:isprimitive() then
-            local hName = prefix..fld.field
-            -- HACK: Hardcoding missing #define's
-            local hType =
-              (fld.type == int)    and HDF5.H5T_STD_I32LE_g  or
-              (fld.type == int8)   and HDF5.H5T_STD_I8LE_g   or
-              (fld.type == int16)  and HDF5.H5T_STD_I16LE_g  or
-              (fld.type == int32)  and HDF5.H5T_STD_I32LE_g  or
-              (fld.type == int64)  and HDF5.H5T_STD_I64LE_g  or
-              (fld.type == uint)   and HDF5.H5T_STD_U32LE_g  or
-              (fld.type == uint8)  and HDF5.H5T_STD_U8LE_g   or
-              (fld.type == uint16) and HDF5.H5T_STD_U16LE_g  or
-              (fld.type == uint32) and HDF5.H5T_STD_U32LE_g  or
-              (fld.type == uint64) and HDF5.H5T_STD_U64LE_g  or
-              (fld.type == bool)   and HDF5.H5T_STD_U8LE_g   or
-              (fld.type == float)  and HDF5.H5T_IEEE_F32LE_g or
-              (fld.type == double) and HDF5.H5T_IEEE_F64LE_g or
-              assert(false)
-            quotes:insert(quote
-              HDF5.H5Dclose(HDF5.H5Dcreate2(
-                fid, hName, hType, did,
-                HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT))
-            end)
           elseif fld.type:isstruct() then
             mkFieldDecls(fld.type, nil, prefix..fld.field..'.')
-          else assert(false) end
+          else
+            local hName = prefix..fld.field
+            local hType = toHType(fld.type)
+            local dataSet = symbol(HDF5.hid_t, 'dataSet')
+            header:insert(quote
+              var [dataSet] = HDF5.H5Dcreate2(
+                file, hName, hType, dataSpace,
+                HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
+            end)
+            footer:insert(quote
+              HDF5.H5Dclose(dataSet)
+            end)
+          end
         end
       end
       mkFieldDecls(fs, flds:toSet(), '')
-      emit quote [quotes] end
+      emit quote [header] end
+      emit quote [footer:reverse()] end
     end
-    HDF5.H5Sclose(did)
-    HDF5.H5Fclose(fid)
+    HDF5.H5Sclose(dataSpace)
+    HDF5.H5Fclose(file)
   end
   local task reallyDump(r : region(isType, fs), filename : rawstring) where
     reads(r.[flds])
