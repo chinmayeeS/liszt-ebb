@@ -1233,7 +1233,9 @@ function R.Relation:emitDump(flds)
     HDF5.H5Sclose(dataSpace)
     HDF5.H5Fclose(file)
   end
-  local task reallyDump(r : region(isType, fs), filename : rawstring) where
+  local dump __demand(__inline) task dump(r : region(isType, fs),
+                                          filename : rawstring)
+  where
     reads(r.[flds])
   do
     create(filename)
@@ -1244,19 +1246,10 @@ function R.Relation:emitDump(flds)
     release(s.[flds])
     detach(hdf5, s.[flds])
   end
-  local task dump(r : region(isType, fs), filename : rawstring) where
-    reads(r.[flds])
-  do
-    -- HACK: Force region instantiation
-    var x = __physical(r)
-    reallyDump(r, filename)
-  end
   setFunName(create, self:Name()..'_hdf5create_'..flds:toString('_'))
-  setTaskName(reallyDump, self:Name()..'_hdf5reallyDump_'..flds:toString('_'))
   setTaskName(dump, self:Name()..'_hdf5dump_'..flds:toString('_'))
   if DEBUG then
     prettyPrintFun(create)
-    prettyPrintTask(reallyDump)
     prettyPrintTask(dump)
   end
   return dump
@@ -1267,7 +1260,9 @@ end
 function R.Relation:emitLoad(flds)
   local isType = self:indexSpaceType()
   local fs = self:fieldSpace()
-  local task load(r : region(isType, fs), filename : rawstring) where
+  local load __demand(__inline) task load(r : region(isType, fs),
+                                          filename : rawstring)
+  where
     reads writes(r.[flds])
   do
     var s = region([self:mkISpaceInit()], fs)
