@@ -800,9 +800,11 @@ function AST.Call:toRExpr(ctxt)
       if x == 0 and y == 0 then
         return base
       end
-      return rexpr int2d{ x = (base.x + x + [dims[1]]) % [dims[1]],
-                          y = (base.y + y + [dims[2]]) % [dims[2]] } end
-
+      return rexpr (base + {x,y}) %
+        rect2d{
+          lo = int2d{ x = 0,           y = 0           },
+          hi = int2d{ x = [dims[1]-1], y = [dims[2]-1] } }
+      end
     elseif N == 3 then
       local x = mat[1][4]
       local y = mat[2][4]
@@ -810,9 +812,11 @@ function AST.Call:toRExpr(ctxt)
       if x == 0 and y == 0 and z == 0 then
         return base
       end
-      return rexpr int3d{ x = (base.x + x + [dims[1]]) % [dims[1]],
-                          y = (base.y + y + [dims[2]]) % [dims[2]],
-                          z = (base.z + z + [dims[3]]) % [dims[3]] } end
+      return rexpr (base + {x,y,z}) %
+        rect3d{
+          lo = int3d{ x = 0,           y = 0,           z = 0           },
+          hi = int3d{ x = [dims[1]-1], y = [dims[2]-1], z = [dims[3]-1] } }
+      end
     else assert(false) end
   end
   -- Assertion
