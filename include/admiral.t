@@ -162,15 +162,15 @@ local function idSanitize(s)
   return s:gsub('[^%w]', '_')
 end
 
-local nameCache = {} -- map(string, (* -> *) | RG.task)
+local NAME_CACHE = {} -- map(string, (* -> *) | RG.task)
 
 -- RG.task, string -> ()
 local function setTaskName(tsk, name)
   name = idSanitize(name)
-  while nameCache[name] do
+  while NAME_CACHE[name] do
     name = name..'_'
   end
-  nameCache[name] = tsk
+  NAME_CACHE[name] = tsk
   tsk:setname(name)
   tsk.ast.name[1] = name -- TODO: Dangerous
 end
@@ -178,10 +178,10 @@ end
 -- (* -> *), string -> ()
 local function setFunName(fun, name)
   name = idSanitize(name)
-  while nameCache[name] do
+  while NAME_CACHE[name] do
     name = name..'_'
   end
-  nameCache[name] = fun
+  NAME_CACHE[name] = fun
   fun:setname(name)
 end
 
@@ -307,7 +307,7 @@ function F.Function:isKernel()
 end
 
 -- map(B.Builtin, (double -> double))
-local unaryArithFuns = {
+local UNARY_ARITH_FUNS = {
   [L.acos]  = C.acos,
   [L.asin]  = C.asin,
   [L.atan]  = C.atan,
@@ -324,7 +324,7 @@ local unaryArithFuns = {
 }
 
 -- map(B.Builtin, (double, double -> double))
-local binaryArithFuns = {
+local BINARY_ARITH_FUNS = {
   [L.pow]   = C.pow,
 }
 
@@ -654,12 +654,12 @@ function AST.UserFunction:toTask(info)
   return tsk, ctxt
 end
 
-local toKernelTask_cache = {} -- map(F.Function, {RG.task,FunContext})
+local TO_KERNEL_TASK_CACHE = {} -- map(F.Function, {RG.task,FunContext})
 
 -- () -> RG.task, FunContext
 function F.Function:toKernelTask()
-  if toKernelTask_cache[self] then
-    return unpack(toKernelTask_cache[self])
+  if TO_KERNEL_TASK_CACHE[self] then
+    return unpack(TO_KERNEL_TASK_CACHE[self])
   end
   assert(self:isKernel())
   local argRel = self._decl_ast.ptypes[1].relation
@@ -674,18 +674,18 @@ function F.Function:toKernelTask()
   info.name = self:Name()
   info.domainRel = argRel
   local tsk, ctxt = typedAST:toTask(info)
-  toKernelTask_cache[self] = {tsk, ctxt}
+  TO_KERNEL_TASK_CACHE[self] = {tsk, ctxt}
   return tsk, ctxt
 end
 
-local toHelperTask_cache = {} -- map(F.Function, {RG.task,FunContext})
+local TO_HELPER_TASK_CACHE = {} -- map(F.Function, {RG.task,FunContext})
 
 -- T.Type*, R.Relation? -> RG.task, FunContext
 function F.Function:toHelperTask(argTypes, callerDom)
   -- TODO: Only caching on the function object; we assume the helper functions
   -- have a single specialization.
-  if toHelperTask_cache[self] then
-    return unpack(toHelperTask_cache[self])
+  if TO_HELPER_TASK_CACHE[self] then
+    return unpack(TO_HELPER_TASK_CACHE[self])
   end
   local typedAST = S.check_helper_func(self, argTypes)
   local info = P.phasePass(typedAST)
@@ -698,7 +698,7 @@ function F.Function:toHelperTask(argTypes, callerDom)
   info.domainRel = nil
   typedAST.ptypes = argTypes
   local tsk, ctxt = typedAST:toTask(info)
-  toHelperTask_cache[self] = {tsk, ctxt}
+  TO_HELPER_TASK_CACHE[self] = {tsk, ctxt}
   return tsk, ctxt
 end
 
@@ -840,17 +840,17 @@ function AST.Call:toRExpr(ctxt)
   end
   -- Unary arithmetic function
   -- self.params[1] : AST.Expression
-  if unaryArithFuns[self.func] then
+  if UNARY_ARITH_FUNS[self.func] then
     local arg = self.params[1]:toRExpr(ctxt)
-    return rexpr [unaryArithFuns[self.func]](arg) end
+    return rexpr [UNARY_ARITH_FUNS[self.func]](arg) end
   end
   -- Binary arithmetic function
   -- self.params[1] : AST.Expression
   -- self.params[2] : AST.Expression
-  if binaryArithFuns[self.func] then
+  if BINARY_ARITH_FUNS[self.func] then
     local arg1 = self.params[1]:toRExpr(ctxt)
     local arg2 = self.params[2]:toRExpr(ctxt)
-    return rexpr [binaryArithFuns[self.func]](arg1, arg2) end
+    return rexpr [BINARY_ARITH_FUNS[self.func]](arg1, arg2) end
   end
   -- Min/max call
   -- self.params[1] : AST.Expression
