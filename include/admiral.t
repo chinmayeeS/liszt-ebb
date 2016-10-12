@@ -38,7 +38,41 @@ local RG  = regentlib
 local S   = require 'ebb.src.semant'
 local T   = require 'ebb.src.types'
 
-local DEBUG = false
+-------------------------------------------------------------------------------
+-- Parse config options from environment
+-------------------------------------------------------------------------------
+
+-- string -> boolean
+local function exists(filename)
+    return os.rename(filename, filename) and true or false
+end
+
+local DEBUG = os.getenv('DEBUG') == '1'
+
+local SAVEOBJ = os.getenv('SAVEOBJ') == '1'
+
+local OBJNAME = os.getenv('OBJNAME')
+  or arg[0]:match("^.+/(.+)$"):match("^[^.]+")
+
+local USEHDF = not (os.getenv('USEHDF') == '0')
+
+local HDF_HEADER
+if USEHDF then
+  if exists('/usr/include/hdf5/serial') then
+    HDF_HEADER = 'hdf5/serial/hdf5.h'
+  else
+    HDF_HEADER = 'hdf5.h'
+  end
+end
+
+local LIBS = terralib.newlist({'-lm'})
+if USEHDF then
+  if exists('/usr/include/hdf5/serial') then
+    LIBS:insert('-lhdf5_serial')
+  else
+    LIBS:insert('-L/usr/lib/x86_64-linux-gnu -lhdf')
+  end
+end
 
 -------------------------------------------------------------------------------
 -- Helper functions
@@ -183,11 +217,6 @@ local function setFunName(fun, name)
   end
   NAME_CACHE[name] = fun
   fun:setname(name)
-end
-
--- string -> boolean
-local function exists(filename)
-    return os.rename(filename, filename) and true or false
 end
 
 local TerraList = getmetatable(terralib.newlist())
@@ -1134,161 +1163,156 @@ end
 -- Relation dumping & loading
 -------------------------------------------------------------------------------
 
-local hdf5hdr, hdf5lib
-if exists('/usr/include/hdf5/serial') then
-  hdf5Hdr = 'hdf5/serial/hdf5.h'
-  hdf5Lib = '-lhdf5_serial'
-else
-  hdf5Hdr = 'hdf5.h'
-  hdf5Lib = '-L/usr/lib/x86_64-linux-gnu -lhdf'
-end
+if USEHDF then
 
-local HDF5 = terralib.includec(hdf5Hdr)
+  local HDF5 = terralib.includec(HDF_HEADER)
 
--- HACK: Hardcoding missing #define's
-HDF5.H5F_ACC_TRUNC = 2
-HDF5.H5P_DEFAULT = 0
+  -- HACK: Hardcoding missing #define's
+  HDF5.H5F_ACC_TRUNC = 2
+  HDF5.H5P_DEFAULT = 0
 
--- string* -> RG.task
--- TODO: Not caching the generated tasks.
-function R.Relation:emitDump(flds)
-  local dims = self:Dims()
-  local nDims = #dims
-  local isType = self:indexSpaceType()
-  local fs = self:fieldSpace()
-  local terra create(filename : rawstring)
-    var file = HDF5.H5Fcreate(filename, HDF5.H5F_ACC_TRUNC,
-                              HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
-    var sizes : HDF5.hsize_t[nDims]
-    escape
-      if #dims == 1 then
-        emit quote
-          sizes[0] = [dims[1]]
-        end
-      elseif #dims == 2 then
-        emit quote
-          sizes[0] = [dims[1]]
-          sizes[1] = [dims[2]]
-        end
-      elseif #dims == 3 then
-        emit quote
-          sizes[0] = [dims[1]]
-          sizes[1] = [dims[2]]
-          sizes[2] = [dims[3]]
-        end
-      else assert(false) end
-    end
-    var dataSpace = HDF5.H5Screate_simple([#dims], sizes, [&uint64](0))
-    escape
-      local header = terralib.newlist() -- terralib.quote*
-      local footer = terralib.newlist() -- terralib.quote*
-      -- terralib.type -> terralib.quote
-      local function toHType(T)
-        -- TODO: Not supporting: pointers, vectors, non-primitive arrays
-        if T:isprimitive() then
-          return
-            -- HACK: Hardcoding missing #define's
-            (T == int)    and HDF5.H5T_STD_I32LE_g  or
-            (T == int8)   and HDF5.H5T_STD_I8LE_g   or
-            (T == int16)  and HDF5.H5T_STD_I16LE_g  or
-            (T == int32)  and HDF5.H5T_STD_I32LE_g  or
-            (T == int64)  and HDF5.H5T_STD_I64LE_g  or
-            (T == uint)   and HDF5.H5T_STD_U32LE_g  or
-            (T == uint8)  and HDF5.H5T_STD_U8LE_g   or
-            (T == uint16) and HDF5.H5T_STD_U16LE_g  or
-            (T == uint32) and HDF5.H5T_STD_U32LE_g  or
-            (T == uint64) and HDF5.H5T_STD_U64LE_g  or
-            (T == bool)   and HDF5.H5T_STD_U8LE_g   or
-            (T == float)  and HDF5.H5T_IEEE_F32LE_g or
-            (T == double) and HDF5.H5T_IEEE_F64LE_g or
-            assert(false)
-        elseif T:isarray() then
-          local elemType = toHType(T.type)
-          local arrayType = symbol(HDF5.hid_t, 'arrayType')
-          header:insert(quote
-            var dims : HDF5.hsize_t[1]
-            dims[0] = T.N
-            var [arrayType] = HDF5.H5Tarray_create2(elemType, 1, dims)
-          end)
-          footer:insert(quote
-            HDF5.H5Tclose(arrayType)
-          end)
-          return arrayType
+  -- string* -> RG.task
+  -- TODO: Not caching the generated tasks.
+  function R.Relation:emitDump(flds)
+    local dims = self:Dims()
+    local nDims = #dims
+    local isType = self:indexSpaceType()
+    local fs = self:fieldSpace()
+    local terra create(filename : rawstring)
+      var file = HDF5.H5Fcreate(filename, HDF5.H5F_ACC_TRUNC,
+                                HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
+      var sizes : HDF5.hsize_t[nDims]
+      escape
+        if #dims == 1 then
+          emit quote
+            sizes[0] = [dims[1]]
+          end
+        elseif #dims == 2 then
+          emit quote
+            sizes[0] = [dims[1]]
+            sizes[1] = [dims[2]]
+          end
+        elseif #dims == 3 then
+          emit quote
+            sizes[0] = [dims[1]]
+            sizes[1] = [dims[2]]
+            sizes[2] = [dims[3]]
+          end
         else assert(false) end
       end
-      -- terralib.struct, set(string), string -> ()
-      local function mkFieldDecls(fs, whitelist, prefix)
-         -- TODO: Only supporting pure structs, not fspaces
-        assert(fs:isstruct())
-        for _,fld in ipairs(fs.entries) do
-          if whitelist and not whitelist[fld.field] then
-          elseif fld.type:isstruct() then
-            mkFieldDecls(fld.type, nil, prefix..fld.field..'.')
-          else
-            local hName = prefix..fld.field
-            local hType = toHType(fld.type)
-            local dataSet = symbol(HDF5.hid_t, 'dataSet')
+      var dataSpace = HDF5.H5Screate_simple([#dims], sizes, [&uint64](0))
+      escape
+        local header = terralib.newlist() -- terralib.quote*
+        local footer = terralib.newlist() -- terralib.quote*
+        -- terralib.type -> terralib.quote
+        local function toHType(T)
+          -- TODO: Not supporting: pointers, vectors, non-primitive arrays
+          if T:isprimitive() then
+            return
+              -- HACK: Hardcoding missing #define's
+              (T == int)    and HDF5.H5T_STD_I32LE_g  or
+              (T == int8)   and HDF5.H5T_STD_I8LE_g   or
+              (T == int16)  and HDF5.H5T_STD_I16LE_g  or
+              (T == int32)  and HDF5.H5T_STD_I32LE_g  or
+              (T == int64)  and HDF5.H5T_STD_I64LE_g  or
+              (T == uint)   and HDF5.H5T_STD_U32LE_g  or
+              (T == uint8)  and HDF5.H5T_STD_U8LE_g   or
+              (T == uint16) and HDF5.H5T_STD_U16LE_g  or
+              (T == uint32) and HDF5.H5T_STD_U32LE_g  or
+              (T == uint64) and HDF5.H5T_STD_U64LE_g  or
+              (T == bool)   and HDF5.H5T_STD_U8LE_g   or
+              (T == float)  and HDF5.H5T_IEEE_F32LE_g or
+              (T == double) and HDF5.H5T_IEEE_F64LE_g or
+              assert(false)
+          elseif T:isarray() then
+            local elemType = toHType(T.type)
+            local arrayType = symbol(HDF5.hid_t, 'arrayType')
             header:insert(quote
-              var [dataSet] = HDF5.H5Dcreate2(
-                file, hName, hType, dataSpace,
-                HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
+              var dims : HDF5.hsize_t[1]
+              dims[0] = T.N
+              var [arrayType] = HDF5.H5Tarray_create2(elemType, 1, dims)
             end)
             footer:insert(quote
-              HDF5.H5Dclose(dataSet)
+              HDF5.H5Tclose(arrayType)
             end)
+            return arrayType
+          else assert(false) end
+        end
+        -- terralib.struct, set(string), string -> ()
+        local function mkFieldDecls(fs, whitelist, prefix)
+           -- TODO: Only supporting pure structs, not fspaces
+          assert(fs:isstruct())
+          for _,fld in ipairs(fs.entries) do
+            if whitelist and not whitelist[fld.field] then
+            elseif fld.type:isstruct() then
+              mkFieldDecls(fld.type, nil, prefix..fld.field..'.')
+            else
+              local hName = prefix..fld.field
+              local hType = toHType(fld.type)
+              local dataSet = symbol(HDF5.hid_t, 'dataSet')
+              header:insert(quote
+                var [dataSet] = HDF5.H5Dcreate2(
+                  file, hName, hType, dataSpace,
+                  HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
+              end)
+              footer:insert(quote
+                HDF5.H5Dclose(dataSet)
+              end)
+            end
           end
         end
+        mkFieldDecls(fs, flds:toSet(), '')
+        emit quote [header] end
+        emit quote [footer:reverse()] end
       end
-      mkFieldDecls(fs, flds:toSet(), '')
-      emit quote [header] end
-      emit quote [footer:reverse()] end
+      HDF5.H5Sclose(dataSpace)
+      HDF5.H5Fclose(file)
     end
-    HDF5.H5Sclose(dataSpace)
-    HDF5.H5Fclose(file)
+    local dump __demand(__inline) task dump(r : region(isType, fs),
+                                            filename : rawstring)
+    where
+      reads(r.[flds])
+    do
+      create(filename)
+      var s = region([self:mkISpaceInit()], fs)
+      attach(hdf5, s.[flds], filename, RG.file_read_write)
+      acquire(s.[flds])
+      copy(r.[flds], s.[flds])
+      release(s.[flds])
+      detach(hdf5, s.[flds])
+    end
+    setFunName(create, self:Name()..'_hdf5create_'..flds:toString('_'))
+    setTaskName(dump, self:Name()..'_hdf5dump_'..flds:toString('_'))
+    if DEBUG then
+      prettyPrintFun(create)
+      prettyPrintTask(dump)
+    end
+    return dump
   end
-  local dump __demand(__inline) task dump(r : region(isType, fs),
-                                          filename : rawstring)
-  where
-    reads(r.[flds])
-  do
-    create(filename)
-    var s = region([self:mkISpaceInit()], fs)
-    attach(hdf5, s.[flds], filename, RG.file_read_write)
-    acquire(s.[flds])
-    copy(r.[flds], s.[flds])
-    release(s.[flds])
-    detach(hdf5, s.[flds])
-  end
-  setFunName(create, self:Name()..'_hdf5create_'..flds:toString('_'))
-  setTaskName(dump, self:Name()..'_hdf5dump_'..flds:toString('_'))
-  if DEBUG then
-    prettyPrintFun(create)
-    prettyPrintTask(dump)
-  end
-  return dump
-end
 
--- string* -> RG.task
--- TODO: Not caching the generated tasks.
-function R.Relation:emitLoad(flds)
-  local isType = self:indexSpaceType()
-  local fs = self:fieldSpace()
-  local load __demand(__inline) task load(r : region(isType, fs),
-                                          filename : rawstring)
-  where
-    reads writes(r.[flds])
-  do
-    var s = region([self:mkISpaceInit()], fs)
-    attach(hdf5, s.[flds], filename, RG.file_read_only)
-    acquire(s.[flds])
-    copy(s.[flds], r.[flds])
-    release(s.[flds])
-    detach(hdf5, s.[flds])
+  -- string* -> RG.task
+  -- TODO: Not caching the generated tasks.
+  function R.Relation:emitLoad(flds)
+    local isType = self:indexSpaceType()
+    local fs = self:fieldSpace()
+    local load __demand(__inline) task load(r : region(isType, fs),
+                                            filename : rawstring)
+    where
+      reads writes(r.[flds])
+    do
+      var s = region([self:mkISpaceInit()], fs)
+      attach(hdf5, s.[flds], filename, RG.file_read_only)
+      acquire(s.[flds])
+      copy(s.[flds], r.[flds])
+      release(s.[flds])
+      detach(hdf5, s.[flds])
+    end
+    setTaskName(load, self:Name()..'_hdf5load_'..flds:toString('_'))
+    if DEBUG then prettyPrintTask(load) end
+    return load
   end
-  setTaskName(load, self:Name()..'_hdf5load_'..flds:toString('_'))
-  if DEBUG then prettyPrintTask(load) end
-  return load
-end
+
+end -- if USEHDF
 
 -------------------------------------------------------------------------------
 -- Control program translation
@@ -1558,11 +1582,9 @@ function A.translateAndRun()
     prettyPrintTask(main)
     print('regentlib.start('..main:getname()[1]..')')
   end
-  if os.getenv('SAVEOBJ') == '1' then
-    local objName = os.getenv('OBJNAME')
-      or arg[0]:match("^.+/(.+)$"):match("^[^.]+")
-    print('Saving executable to '..objName)
-    RG.saveobj(main, objName, 'executable', nil, {'-lm',hdf5Lib})
+  if SAVEOBJ then
+    print('Saving executable to '..OBJNAME)
+    RG.saveobj(main, OBJNAME, 'executable', nil, LIBS)
   else
     RG.start(main)
   end
