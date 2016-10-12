@@ -54,10 +54,10 @@ local SAVEOBJ = os.getenv('SAVEOBJ') == '1'
 local OBJNAME = os.getenv('OBJNAME')
   or arg[0]:match("^.+/(.+)$"):match("^[^.]+")
 
-local USEHDF = not (os.getenv('USEHDF') == '0')
+local USE_HDF = not (os.getenv('USE_HDF') == '0')
 
 local HDF_HEADER
-if USEHDF then
+if USE_HDF then
   if exists('/usr/include/hdf5/serial') then
     HDF_HEADER = 'hdf5/serial/hdf5.h'
   else
@@ -66,7 +66,7 @@ if USEHDF then
 end
 
 local LIBS = terralib.newlist({'-lm'})
-if USEHDF then
+if USE_HDF then
   if exists('/usr/include/hdf5/serial') then
     LIBS:insert('-lhdf5_serial')
   else
@@ -1163,7 +1163,7 @@ end
 -- Relation dumping & loading
 -------------------------------------------------------------------------------
 
-if USEHDF then
+if USE_HDF then
 
   local HDF5 = terralib.includec(HDF_HEADER)
 
@@ -1312,7 +1312,7 @@ if USEHDF then
     return load
   end
 
-end -- if USEHDF
+end -- if USE_HDF
 
 -------------------------------------------------------------------------------
 -- Control program translation
