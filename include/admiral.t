@@ -51,8 +51,7 @@ local DEBUG = os.getenv('DEBUG') == '1'
 
 local SAVEOBJ = os.getenv('SAVEOBJ') == '1'
 
-local OBJNAME = os.getenv('OBJNAME')
-  or arg[0]:match("^.+/(.+)$"):match("^[^.]+")
+local OBJNAME = os.getenv('OBJNAME') or 'a.out'
 
 local USE_HDF = not (os.getenv('USE_HDF') == '0')
 
@@ -345,7 +344,6 @@ local UNARY_ARITH_FUNS = {
   [L.cos]   = C.cos,
   [L.fabs]  = C.fabs,
   [L.floor] = C.floor,
-  [L.fmod]  = C.fmod,
   [L.log]   = C.log,
   [L.sin]   = C.sin,
   [L.sqrt]  = C.sqrt,
@@ -355,6 +353,7 @@ local UNARY_ARITH_FUNS = {
 -- map(B.Builtin, (double, double -> double))
 local BINARY_ARITH_FUNS = {
   [L.pow]   = C.pow,
+  [L.fmod]  = C.fmod,
 }
 
 -- T.Type -> terralib.type
@@ -391,12 +390,16 @@ end
 -- M.ExprConst, T.Type? -> RG.rexpr
 local function toRConst(lit, typ)
   typ = typ or inferType(lit)
-  if type(lit) == 'boolean' then
+  if typ:iskey() then
+    return typ.relation:translateIndex(lit)
+  elseif type(lit) == 'boolean' then
     assert(typ == L.bool)
     return rexpr lit end
   elseif type(lit) == 'number' then
     return rexpr [toRType(typ)](lit) end
   elseif type(lit) == 'table' then
+    -- TODO: Not supporting matrix types, or operations
+    assert(typ:isvector())
     assert(terralib.israwlist(lit))
     assert(#lit == typ.N)
     return emitVectorCtor(
@@ -407,7 +410,7 @@ local function toRConst(lit, typ)
   else assert(false) end
 end
 
--- string, L.Type, RG.rexpr, RG.rexpr -> RG.rquote
+-- string, T.Type, RG.rexpr, RG.rexpr -> RG.rquote
 local function emitReduce(op, typ, lval, exp)
   if typ:isvector() then
     local tmp = RG.newsymbol(toRType(typ), 'tmp')
@@ -478,6 +481,26 @@ end)
 function R.Relation:regionType()
   -- Region types in signatures must be distinct, so we're not caching here.
   return region(self:indexSpaceType(), self:fieldSpace())
+end
+
+-- M.ExprConst -> RG.rexpr
+function R.Relation:translateIndex(lit)
+  local dims = self:Dims()
+  local indexType = self:indexType()
+  if #dims == 1 then
+    return rexpr [indexType]([toRConst(lit, L.int)]) end
+  elseif #dims == 2 then
+    assert(terralib.israwlist(lit))
+    assert(#lit == 2)
+    return rexpr [indexType]({ x = [toRConst(lit[1], L.int)],
+                               y = [toRConst(lit[2], L.int)]}) end
+  elseif #dims == 3 then
+    assert(terralib.israwlist(lit))
+    assert(#lit == 3)
+    return rexpr [indexType]({ x = [toRConst(lit[1], L.int)],
+                               y = [toRConst(lit[2], L.int)],
+                               z = [toRConst(lit[3], L.int)]}) end
+  else assert(false) end
 end
 
 -- () -> RG.rexpr
