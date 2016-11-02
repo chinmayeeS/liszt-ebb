@@ -336,24 +336,24 @@ end
 
 -- map(B.Builtin, (double -> double))
 local UNARY_ARITH_FUNS = {
-  [L.acos]  = C.acos,
-  [L.asin]  = C.asin,
-  [L.atan]  = C.atan,
-  [L.cbrt]  = C.cbrt,
-  [L.ceil]  = C.ceil,
-  [L.cos]   = C.cos,
-  [L.fabs]  = C.fabs,
-  [L.floor] = C.floor,
-  [L.log]   = C.log,
-  [L.sin]   = C.sin,
-  [L.sqrt]  = C.sqrt,
-  [L.tan]   = C.tan,
+  [L.acos]  = regentlib.acos(double),
+  [L.asin]  = regentlib.asin(double),
+  [L.atan]  = regentlib.atan(double),
+  [L.cbrt]  = regentlib.cbrt(double),
+  [L.ceil]  = regentlib.ceil(double),
+  [L.cos]   = regentlib.cos(double),
+  [L.fabs]  = regentlib.fabs(double),
+  [L.floor] = regentlib.floor(double),
+  [L.log]   = regentlib.log(double),
+  [L.sin]   = regentlib.sin(double),
+  [L.sqrt]  = regentlib.sqrt(double),
+  [L.tan]   = regentlib.tan(double),
 }
 
 -- map(B.Builtin, (double, double -> double))
 local BINARY_ARITH_FUNS = {
-  [L.pow]   = C.pow,
-  [L.fmod]  = C.fmod,
+  [L.pow]   = regentlib.pow(double),
+  [L.fmod]  = regentlib.fmod(double),
 }
 
 -- T.Type -> terralib.type
@@ -690,9 +690,16 @@ function AST.UserFunction:toTask(info)
   if info.domainRel then
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
-    local st __demand(__parallel) task st([ctxt:signature()]) where
-      dom <= univ, [ctxt.privileges]
-    do [body] end
+    local st
+    if not ctxt.reducedGlobal then
+      __demand(__parallel, __cuda) task st([ctxt:signature()]) where
+        dom <= univ, [ctxt.privileges]
+      do [body] end
+    else
+      __demand(__parallel) task st([ctxt:signature()]) where
+        dom <= univ, [ctxt.privileges]
+      do [body] end
+    end
     tsk = st
   else
     local st __demand(__inline) task st([ctxt:signature()]) where
@@ -1609,6 +1616,6 @@ function A.translateAndRun()
     print('Saving executable to '..OBJNAME)
     RG.saveobj(main, OBJNAME, 'executable', nil, LIBS)
   else
-    RG.start(main)
+    RG.start(main, mapper_registration)
   end
 end
