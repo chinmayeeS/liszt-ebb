@@ -1616,6 +1616,6 @@ function A.translateAndRun()
     print('Saving executable to '..OBJNAME)
     RG.saveobj(main, OBJNAME, 'executable', nil, LIBS)
   else
-    RG.start(main, mapper_registration)
+    RG.start(main)
   end
 end
