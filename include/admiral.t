@@ -67,9 +67,11 @@ end
 local LIBS = terralib.newlist({'-lm'})
 if USE_HDF then
   if exists('/usr/include/hdf5/serial') then
+    terralib.linklibrary('libhdf5_serial.so')
     LIBS:insert('-lhdf5_serial')
   else
-    LIBS:insert('-L/usr/lib/x86_64-linux-gnu -lhdf')
+    terralib.linklibrary('libhdf5.so')
+    LIBS:insertall {'-L/usr/lib/x86_64-linux-gnu', '-lhdf' }
   end
 end
 
