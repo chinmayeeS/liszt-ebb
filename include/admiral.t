@@ -464,6 +464,32 @@ function R.Relation:indexType()
     assert(false)
 end
 
+-- () -> (uint64[K] -> intKd)
+R.Relation.emitVectorToIndexType = terralib.memoize(function(self)
+  local dims = self:Dims()
+  local indexType = self:indexType()
+  local tsk
+  if #dims == 1 then
+    local st __demand(__inline) task st(v : uint64[1])
+      return [indexType](v[0])
+    end
+    tsk = st
+  elseif #dims == 2 then
+    local st __demand(__inline) task st(v : uint64[2])
+      return [indexType]({x = v[0], y = v[1]})
+    end
+    tsk = st
+  elseif #dims == 3 then
+    local st __demand(__inline) task st(v : uint64[3])
+      return [indexType]({x = v[0], y = v[1], z = v[2]})
+    end
+    tsk = st
+  else assert(false) end
+  setTaskName(tsk, 'vectorToIndexType')
+  if DEBUG then prettyPrintTask(tsk) end
+  return tsk
+end)
+
 -- () -> RG.ispace_type
 function R.Relation:indexSpaceType()
   return ispace(self:indexType())
@@ -954,7 +980,19 @@ function AST.Call:toRExpr(ctxt)
     local arg2 = self.params[2]:toRExpr(ctxt)
     return rexpr fun([arg1], [arg2]) end
   end
-
+  -- Derive key value from indices
+  -- self.params[1] : AST.VectorLiteral
+  -- self.params[2] : AST.LuaObject
+  --   .node_type.value : R.Relation
+  -- TODO: Only allowing literals given directly
+  if self.func == L.UNSAFE_ROW then
+    local rel = self.params[2].node_type.value
+    local keyExpr = self.params[1]:toRExpr(ctxt)
+    local vec2idx = rel:emitVectorToIndexType()
+    return rexpr vec2idx(keyExpr) end
+  end
+  -- Call to terra function
+  -- self.params : AST.Expression*
   if self.func.is_a_terra_func then
     local args = terralib.newlist()
     for idx = 1, #self.params do
@@ -962,8 +1000,7 @@ function AST.Call:toRExpr(ctxt)
     end
     return rexpr [self.func.terrafn]([args]) end
   end
-
-  -- TODO: Not covered: L.print, L.cross, L.length, L.UNSAFE_ROW
+  -- TODO: Not covered: L.print, L.cross, L.length
   assert(false)
 end
 function AST.Cast:toRExpr(ctxt)
