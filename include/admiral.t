@@ -954,6 +954,15 @@ function AST.Call:toRExpr(ctxt)
     local arg2 = self.params[2]:toRExpr(ctxt)
     return rexpr fun([arg1], [arg2]) end
   end
+
+  if self.func.is_a_terra_func then
+    local args = terralib.newlist()
+    for idx = 1, #self.params do
+      args:insert(self.params[idx]:toRExpr(ctxt))
+    end
+    return rexpr [self.func.terrafn]([args]) end
+  end
+
   -- TODO: Not covered: L.print, L.cross, L.length, L.UNSAFE_ROW
   assert(false)
 end

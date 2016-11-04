@@ -653,6 +653,7 @@ end
 function B.terra_to_func(terrafn)
     local newfunc = Builtin.new()
     newfunc.is_a_terra_func = true
+    newfunc.terrafn = terrafn
     newfunc.check = TerraCheck(terrafn)
     return newfunc
 end
