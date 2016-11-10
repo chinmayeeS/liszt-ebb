@@ -715,7 +715,7 @@ function AST.UserFunction:toTask(info)
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
     local st
-    if not ctxt.reducedGlobal and regentlib.config["cuda"] then
+    if not ctxt.reducedGlobal and regentlib.check_cuda_available() then
       __demand(__parallel, __cuda) task st([ctxt:signature()]) where
         dom <= univ, [ctxt.privileges]
       do [body] end
