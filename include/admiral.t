@@ -1566,7 +1566,7 @@ function M.AST.UnaryOp:toRExpr(ctxt)
     assert(false)
 end
 
-function A.translateAndRun()
+function A.translateAndRun(mapper_registration, link_flags)
   if DEBUG then print('import "regent"') end
   local stmts = terralib.newlist()
   local ctxt = { -- ProgramContext
@@ -1663,8 +1663,11 @@ function A.translateAndRun()
   end
   if SAVEOBJ then
     print('Saving executable to '..OBJNAME)
-    RG.saveobj(main, OBJNAME, 'executable', nil, LIBS)
+    for idx = 1, #LIBS do
+      link_flags[#link_flags + 1] = LIBS[idx]
+    end
+    RG.saveobj(main, OBJNAME, 'executable', mapper_registration, link_flags)
   else
-    RG.start(main)
+    RG.start(main, mapper_registration)
   end
 end
