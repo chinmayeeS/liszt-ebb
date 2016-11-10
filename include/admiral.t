@@ -668,15 +668,17 @@ function FunContext:signature()
   if self.domainRel then
     fullArgs:insert(self.domainSym)
   end
-  for i,arg in ipairs(self.args) do
+  for i = 1, #self.args do
     if i > 1 or not self.domainRel then
       fullArgs:insert(self.args[i])
     end
   end
-  for _,rel in ipairs(self.accessedRels) do
+  for i = 1, #self.accessedRels do
+    local rel = self.accessedRels[i]
     fullArgs:insert(self.relMap[rel])
   end
-  for _,g in ipairs(self.readGlobals) do
+  for i = 1, #self.readGlobals do
+    local g = self.readGlobals[i]
     fullArgs:insert(self.globalMap[g])
   end
   return fullArgs
@@ -798,13 +800,16 @@ local function recoverHelperCall(expr, ctxt)
   end)
   local hTask, hCtxt = expr.orig_func:toHelperTask(argTypes, ctxt.domainRel)
   local actualArgs = terralib.newlist()
-  for _,p in ipairs(expr.orig_params) do
+  for i = 1, #expr.orig_params do
+    local p = expr.orig_params[i]
     actualArgs:insert(p:toRExpr(ctxt))
   end
-  for _,rel in ipairs(hCtxt.accessedRels) do
+  for i = 1, #hCtxt.accessedRels do
+    local rel = hCtxt.accessedRels[i]
     actualArgs:insert(assert(ctxt.relMap[rel]))
   end
-  for _,g in ipairs(hCtxt.readGlobals) do
+  for i = 1, #hCtxt.readGlobals do
+    local g = hCtxt.readGlobals[i]
     actualArgs:insert(assert(ctxt.globalMap[g]))
   end
   return rexpr [hTask]([actualArgs]) end
