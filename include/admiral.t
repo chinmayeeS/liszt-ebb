@@ -468,26 +468,22 @@ end
 R.Relation.emitVectorToIndexType = terralib.memoize(function(self)
   local dims = self:Dims()
   local indexType = self:indexType()
-  local tsk
+  local vectorToIndexType
   if #dims == 1 then
-    local st __demand(__inline) task st(v : uint64[1])
-      return [indexType](v[0])
+    terra vectorToIndexType(v : uint64[1])
+      return [indexType]({__ptr = [indexType.impl_type](v[0])})
     end
-    tsk = st
   elseif #dims == 2 then
-    local st __demand(__inline) task st(v : uint64[2])
-      return [indexType]({x = v[0], y = v[1]})
+    terra vectorToIndexType(v : uint64[2])
+      return [indexType]({__ptr = [indexType.impl_type] {v[0], v[1]}})
     end
-    tsk = st
   elseif #dims == 3 then
-    local st __demand(__inline) task st(v : uint64[3])
-      return [indexType]({x = v[0], y = v[1], z = v[2]})
+    terra vectorToIndexType(v : uint64[3])
+      return [indexType]({__ptr = [indexType.impl_type] {v[0], v[1], v[2]}})
     end
-    tsk = st
   else assert(false) end
-  setTaskName(tsk, 'vectorToIndexType')
-  if DEBUG then prettyPrintTask(tsk) end
-  return tsk
+  if DEBUG then vectorToIndexType:printpretty(false) end
+  return vectorToIndexType
 end)
 
 -- () -> RG.ispace_type
