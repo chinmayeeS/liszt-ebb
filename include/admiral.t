@@ -338,24 +338,24 @@ end
 
 -- map(B.Builtin, (double -> double))
 local UNARY_ARITH_FUNS = {
-  [L.acos]  = regentlib.acos(double),
-  [L.asin]  = regentlib.asin(double),
-  [L.atan]  = regentlib.atan(double),
-  [L.cbrt]  = regentlib.cbrt(double),
-  [L.ceil]  = regentlib.ceil(double),
-  [L.cos]   = regentlib.cos(double),
-  [L.fabs]  = regentlib.fabs(double),
-  [L.floor] = regentlib.floor(double),
-  [L.log]   = regentlib.log(double),
-  [L.sin]   = regentlib.sin(double),
-  [L.sqrt]  = regentlib.sqrt(double),
-  [L.tan]   = regentlib.tan(double),
+  [L.acos]  = RG.acos(double),
+  [L.asin]  = RG.asin(double),
+  [L.atan]  = RG.atan(double),
+  [L.cbrt]  = RG.cbrt(double),
+  [L.ceil]  = RG.ceil(double),
+  [L.cos]   = RG.cos(double),
+  [L.fabs]  = RG.fabs(double),
+  [L.floor] = RG.floor(double),
+  [L.log]   = RG.log(double),
+  [L.sin]   = RG.sin(double),
+  [L.sqrt]  = RG.sqrt(double),
+  [L.tan]   = RG.tan(double),
 }
 
 -- map(B.Builtin, (double, double -> double))
 local BINARY_ARITH_FUNS = {
-  [L.pow]   = regentlib.pow(double),
-  [L.fmod]  = regentlib.fmod(double),
+  [L.pow]   = RG.pow(double),
+  [L.fmod]  = RG.fmod(double),
 }
 
 -- T.Type -> terralib.type
@@ -715,7 +715,7 @@ function AST.UserFunction:toTask(info)
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
     local st
-    if not ctxt.reducedGlobal and regentlib.check_cuda_available() then
+    if not ctxt.reducedGlobal and RG.check_cuda_available() then
       __demand(__parallel, __cuda) task st([ctxt:signature()]) where
         dom <= univ, [ctxt.privileges]
       do [body] end
