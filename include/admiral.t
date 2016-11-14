@@ -44,7 +44,7 @@ local T   = require 'ebb.src.types'
 
 -- string -> boolean
 local function exists(filename)
-    return os.rename(filename, filename) and true or false
+  return os.rename(filename, filename) and true or false
 end
 
 local DEBUG = os.getenv('DEBUG') == '1'
@@ -468,22 +468,23 @@ end
 R.Relation.emitVectorToIndexType = terralib.memoize(function(self)
   local dims = self:Dims()
   local indexType = self:indexType()
-  local vectorToIndexType
+  local vec2idx
   if #dims == 1 then
-    terra vectorToIndexType(v : uint64[1])
+    terra vec2idx(v : uint64[1])
       return [indexType]({__ptr = [indexType.impl_type](v[0])})
     end
   elseif #dims == 2 then
-    terra vectorToIndexType(v : uint64[2])
+    terra vec2idx(v : uint64[2])
       return [indexType]({__ptr = [indexType.impl_type] {v[0], v[1]}})
     end
   elseif #dims == 3 then
-    terra vectorToIndexType(v : uint64[3])
+    terra vec2idx(v : uint64[3])
       return [indexType]({__ptr = [indexType.impl_type] {v[0], v[1], v[2]}})
     end
   else assert(false) end
-  if DEBUG then vectorToIndexType:printpretty(false) end
-  return vectorToIndexType
+  setFunName(vec2idx, 'vec'..tostring(#dims)..'d_to_idx')
+  if DEBUG then prettyPrintFun(vec2idx) end
+  return vec2idx
 end)
 
 -- () -> RG.ispace_type

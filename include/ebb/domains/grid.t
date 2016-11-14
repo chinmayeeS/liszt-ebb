@@ -1,23 +1,23 @@
 -- The MIT License (MIT)
--- 
+--
 -- Copyright (c) 2015 Stanford University.
 -- All rights reserved.
--- 
+--
 -- Permission is hereby granted, free of charge, to any person obtaining a
 -- copy of this software and associated documentation files (the "Software"),
 -- to deal in the Software without restriction, including without limitation
 -- the rights to use, copy, modify, merge, publish, distribute, sublicense,
 -- and/or sell copies of the Software, and to permit persons to whom the
 -- Software is furnished to do so, subject to the following conditions:
--- 
+--
 -- The above copyright notice and this permission notice shall be included
 -- in all copies or substantial portions of the Software.
--- 
+--
 -- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 -- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 -- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 -- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
--- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
+-- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 -- FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 -- DEALINGS IN THE SOFTWARE.
 import "ebb"
@@ -280,7 +280,7 @@ local function setup2dEdges(grid)
                                 dims = {Cx,Vy}, periodic = {xp,yp} }
   grid.yedges = L.NewRelation { name = 'yedges',
                                 dims = {Vx,Cy}, periodic = {xp,yp} }
-  
+
   -- Access vertices from the edges
   grid.xedges:NewFieldMacro('tail', L.Macro(function(xe)
     return ebb `L.Affine(verts, {{1,0,0},
@@ -295,7 +295,7 @@ local function setup2dEdges(grid)
   grid.yedges:NewFieldMacro('head', L.Macro(function(ye)
     return ebb `L.Affine(verts, {{1,0,0},
                                  {0,1,1}}, ye)                  end))
-  
+
   -- Access the edges from the vertices
   verts:NewFieldMacro('xpos_edge', L.Macro(function(v)
     return ebb `L.Affine(grid.xedges, {{1,0,0},
@@ -322,7 +322,7 @@ local function setup2dFaces(grid)
                                 dims = {Vx,Cy}, periodic = {xp,yp} }
   grid.yfaces = L.NewRelation { name = 'yfaces',
                                 dims = {Cx,Vy}, periodic = {xp,yp} }
-  
+
   -- Access the cells from the faces
   grid.xfaces:NewFieldMacro('pos', L.Macro(function(xf)
     return ebb `L.Affine(cells, {{1,0,0},
@@ -337,7 +337,7 @@ local function setup2dFaces(grid)
   grid.yfaces:NewFieldMacro('neg', L.Macro(function(yf)
     return ebb `L.Affine(cells, {{1,0,0},
                                  {0,1,-1}}, yf)                 end))
-  
+
   -- Access the faces from the cells
   cells:NewFieldMacro('xpos_face', L.Macro(function(v)
     return ebb `L.Affine(grid.xfaces, {{1,0,1},
@@ -461,7 +461,7 @@ Grid.NewGrid2d{
     _bd_depth   = bd,
     _periodic   = pb,
     -- relations
-    cells           = L.NewRelation { name = 'cells', 
+    cells           = L.NewRelation { name = 'cells',
                                       dims = params.size,  periodic = pb },
     dual_vertices   = L.NewRelation { name = 'dual_vertices',
                                       dims = params.size,  periodic = pb },
@@ -873,7 +873,3 @@ function Grid3d:UsePeriodic()     return copy_table(self._periodic) end
 function Grid3d:CellWidth()
   return { self:xCellWidth(), self:yCellWidth(), self:zCellWidth() }
 end
-
-
-
-
