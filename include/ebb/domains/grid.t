@@ -134,23 +134,16 @@ local function setup2dCells(grid)
   -- hide this unsafe macro behind a bulk call below
   local xsnap = grid:xUsePeriodic() and wrap_idx or clamp_idx
   local ysnap = grid:yUsePeriodic() and wrap_idx or clamp_idx
-  local cell_locate = L.Macro(function(xy_vec)
-    return ebb quote
-      var xy    = xy_vec -- prevent duplication
-      var xval  = (xy[0] - xo)/xw
-      var yval  = (xy[1] - yo)/yw
-      var xidx  = xsnap(xval, Cx)
-      var yidx  = ysnap(yval, Cy)
-    in
-      L.UNSAFE_ROW({xidx, yidx}, grid.cells)
-    end
-  end)
 
   local get_cell_locate_kernel = memoize_call(function(
     particle_rel, particle_pos, particle_cell
   )
     local ebb locate_cells_kernel( p : particle_rel )
-      p.[particle_cell] = cell_locate(p.[particle_pos])
+      var xval  = (p.[particle_pos][0] - xo)/xw
+      var yval  = (p.[particle_pos][1] - yo)/yw
+      var xidx  = xsnap(xval, Cx)
+      var yidx  = ysnap(yval, Cy)
+      p.[particle_cell] = L.UNSAFE_ROW({xidx, yidx}, grid.cells)
     end
     return locate_cells_kernel
   end)
@@ -550,25 +543,18 @@ local function setup3dCells(grid)
   local xsnap = grid:xUsePeriodic() and wrap_idx or clamp_idx
   local ysnap = grid:yUsePeriodic() and wrap_idx or clamp_idx
   local zsnap = grid:zUsePeriodic() and wrap_idx or clamp_idx
-  local cell_locate = L.Macro(function(xyz_vec)
-    return ebb quote
-      var xyz  = xyz_vec -- prevent duplication
-      var xval = (xyz[0] - xo) / xw
-      var yval = (xyz[1] - yo) / yw
-      var zval = (xyz[2] - zo) / zw
-      var xidx = xsnap(xval, Cx)
-      var yidx = ysnap(yval, Cy)
-      var zidx = zsnap(zval, Cz)
-    in
-      L.UNSAFE_ROW({xidx, yidx, zidx}, cells)
-    end
-  end)
 
   local get_cell_locate_kernel = memoize_call(function(
     particle_rel, particle_pos, particle_cell
   )
     local ebb locate_cells_kernel( p : particle_rel )
-      p.[particle_cell] = cell_locate(p.[particle_pos])
+      var xval = (p.[particle_pos][0] - xo) / xw
+      var yval = (p.[particle_pos][1] - yo) / yw
+      var zval = (p.[particle_pos][2] - zo) / zw
+      var xidx = xsnap(xval, Cx)
+      var yidx = ysnap(yval, Cy)
+      var zidx = zsnap(zval, Cz)
+      p.[particle_cell] = L.UNSAFE_ROW({xidx, yidx, zidx}, cells)
     end
     return locate_cells_kernel
   end)
