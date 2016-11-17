@@ -1567,6 +1567,7 @@ function M.AST.UnaryOp:toRExpr(ctxt)
     assert(false)
 end
 
+-- (()->())?, (string*)? -> ()
 function A.translateAndRun(mapper_registration, link_flags)
   if DEBUG then print('import "regent"') end
   local stmts = terralib.newlist()
@@ -1664,6 +1665,7 @@ function A.translateAndRun(mapper_registration, link_flags)
   end
   if SAVEOBJ then
     print('Saving executable to '..OBJNAME)
+    link_flags = link_flags or terralib.newlist()
     for idx = 1, #LIBS do
       link_flags[#link_flags + 1] = LIBS[idx]
     end
