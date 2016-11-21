@@ -180,7 +180,6 @@ end
 -- RG.Task -> ()
 local function prettyPrintTask(tsk)
   tsk:printpretty()
-  prettyPrintFun(tsk:getdefinition())
 end
 
 -- terralib.struct -> ()
@@ -222,6 +221,21 @@ end
 
 local TerraList = getmetatable(terralib.newlist())
 
+-- () -> T*
+function TerraList:copy()
+  return self:map(function(x) return x end)
+end
+
+-- T -> int?
+function TerraList:find(x)
+  for i,elem in ipairs(self) do
+    if elem == x then
+      return i
+    end
+  end
+  return nil
+end
+
 -- () -> set(T)
 function TerraList:toSet()
   local set = {}
@@ -231,8 +245,9 @@ function TerraList:toSet()
   return set
 end
 
--- string -> string
-function TerraList:toString(sep)
+-- string? -> string
+function TerraList:join(sep)
+  sep = sep or ' '
   local res = ''
   for i,elem in ipairs(self) do
     if i > 1 then
@@ -246,9 +261,16 @@ end
 -- () -> T*
 function TerraList:reverse()
   local res = terralib.newlist()
-  for elem = #self, 1, -1 do
-    res:insert(self[elem])
+  for i = #self, 1, -1 do
+    res:insert(self[i])
   end
+  return res
+end
+
+-- () -> T
+function TerraList:pop()
+  local res = self[#self]
+  self[#self] = nil
   return res
 end
 
@@ -1361,8 +1383,8 @@ if USE_HDF then
       release(s.[flds])
       detach(hdf5, s.[flds])
     end
-    setFunName(create, self:Name()..'_hdf5create_'..flds:toString('_'))
-    setTaskName(dump, self:Name()..'_hdf5dump_'..flds:toString('_'))
+    setFunName(create, self:Name()..'_hdf5create_'..flds:join('_'))
+    setTaskName(dump, self:Name()..'_hdf5dump_'..flds:join('_'))
     if DEBUG then
       prettyPrintFun(create)
       prettyPrintTask(dump)
@@ -1387,7 +1409,7 @@ if USE_HDF then
       release(s.[flds])
       detach(hdf5, s.[flds])
     end
-    setTaskName(load, self:Name()..'_hdf5load_'..flds:toString('_'))
+    setTaskName(load, self:Name()..'_hdf5load_'..flds:join('_'))
     if DEBUG then prettyPrintTask(load) end
     return load
   end
