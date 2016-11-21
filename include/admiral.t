@@ -39,7 +39,7 @@ local S   = require 'ebb.src.semant'
 local T   = require 'ebb.src.types'
 
 -------------------------------------------------------------------------------
--- Parse config options from environment
+-- Parse config options
 -------------------------------------------------------------------------------
 
 -- string -> boolean
@@ -74,6 +74,33 @@ if USE_HDF then
     LIBS:insertall {'-L/usr/lib/x86_64-linux-gnu', '-lhdf' }
   end
 end
+
+local function primPartDims()
+  local dop = RG.config["parallelize-dop"]
+  local NX,NY,NZ = dop:match('^(%d+),(%d+),(%d+)$')
+  if NX then
+    return tonumber(NX),tonumber(NY),tonumber(NZ)
+  end
+  local num = assert(tonumber(dop))
+  local factors = terralib.newlist()
+  while num > 1 do
+    for p = 2, num do
+      if num % p == 0 then
+        factors:insert(p)
+        num = num / p
+        break
+      end
+    end
+  end
+  NX,NY,NZ = 1,1,1
+  for i = 1, #factors do
+    if i % 3 == 1 then NX = NX * factors[i] end
+    if i % 3 == 2 then NY = NY * factors[i] end
+    if i % 3 == 0 then NZ = NZ * factors[i] end
+  end
+  return NX,NY,NZ
+end
+local PRIM_PART_NX,PRIM_PART_NY,PRIM_PART_NZ = primPartDims()
 
 -------------------------------------------------------------------------------
 -- Helper functions
@@ -1421,6 +1448,20 @@ end -- if USE_HDF
 -------------------------------------------------------------------------------
 
 -- ProgramContext -> RG.rquote
+function R.Relation:emitPrimPartUpdate(ctxt)
+  local fld = assert(self:autoPartitionField())
+  local baseRel = fld:Type().relation
+  local rg = ctxt.relMap[self]
+  local rgPart = ctxt.primPart[self]
+  local basePart = ctxt.primPart[baseRel]
+  -- TODO: Preimage requires the foreign-key field to be of ptr-type, and we
+  -- need metaprogramming support for fspaces to support that.
+  return rquote
+   -- rgPart = preimage(rg, basePart, rg.[fld:Name()])
+  end
+end
+
+-- ProgramContext -> RG.rquote
 function M.AST.Stmt:toRQuote(ctxt)
   error('Abstract method')
 end
@@ -1456,7 +1497,13 @@ function M.AST.ForEach:toRQuote(ctxt)
       (op == 'min') and rquote [retSym] min= [callExpr] end or
       assert(false)
   end
-  return callQuote
+  local quotes = terralib.newlist({callQuote})
+  local info = self.fun:_get_typechecked(42, self.rel, {})
+  local pt = info.field_use[self.rel:autoPartitionField()]
+  if pt and pt.write then
+    quotes:insert(self.rel:emitPrimPartUpdate(ctxt))
+  end
+  return rquote [quotes] end
 end
 function M.AST.If:toRQuote(ctxt)
   if self.elseBlock then
@@ -1476,10 +1523,16 @@ function M.AST.If:toRQuote(ctxt)
   end
 end
 function M.AST.FillField:toRQuote(ctxt)
-  local relSym = ctxt.relMap[self.fld:Relation()]
-  return rquote
-    fill(relSym.[self.fld:Name()], [toRConst(self.val, self.fld:Type())])
+  local rel = self.fld:Relation()
+  local rg = ctxt.relMap[rel]
+  local fillQuote = rquote
+    fill(rg.[self.fld:Name()], [toRConst(self.val, self.fld:Type())])
   end
+  local quotes = terralib.newlist({fillQuote})
+  if self.fld == rel:autoPartitionField() then
+    quotes:insert(rel:emitPrimPartUpdate(ctxt))
+  end
+  return rquote [quotes] end
 end
 function M.AST.SetGlobal:toRQuote(ctxt)
   return rquote
@@ -1523,11 +1576,16 @@ function M.AST.Load:toRQuote(ctxt)
   local load = self.rel:emitLoad(self.flds)
   local relSym = ctxt.relMap[self.rel]
   local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
+  local primPartUpdQuote = rquote end
+  if self.flds:find(self.rel:autoPartitionField()) then
+    primPartUpdQuote = self.rel:emitPrimPartUpdate(ctxt)
+  end
   return rquote
     var filename = [rawstring](C.malloc(256))
     C.snprintf(filename, 256, [self.file], valRExprs)
     load(relSym, filename)
     C.free(filename)
+    [primPartUpdQuote]
   end
 end
 
@@ -1597,6 +1655,7 @@ function A.translateAndRun(mapper_registration, link_flags)
     globalMap  = {}, -- map(L.Global, RG.symbol)
     relMap     = {}, -- map(R.Relation, RG.symbol)
     subsetMap  = {}, -- map(R.Subset, RG.symbol)
+    primPart   = {}, -- map(R.Relation, RG.symbol)
   }
   -- Collect declarations
   local globalInits = {} -- map(L.Global, M.ExprConst)
@@ -1671,6 +1730,19 @@ function A.translateAndRun(mapper_registration, link_flags)
         RG.c.legion_domain_point_coloring_destroy(coloring)
       end)
     end
+  end
+  -- Emit primary partitioning scheme
+  local primColors = RG.newsymbol(nil, 'primColors')
+  stmts:insert(rquote
+    var [primColors] = ispace(int3d, {PRIM_PART_NX,PRIM_PART_NY,PRIM_PART_NZ})
+  end)
+  for _,rel in ipairs(rels) do
+    local rg = ctxt.relMap[rel]
+    local p = RG.newsymbol(nil, rel:Name()..'_primPart')
+    ctxt.primPart[rel] = p
+    stmts:insert(rquote
+      var [p] = partition(equal, rg, primColors)
+    end)
   end
   -- Process statements
   for _,s in ipairs(M.stmts()) do

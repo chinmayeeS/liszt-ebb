@@ -150,6 +150,7 @@ function R.NewRelation(params)
     _macros     = terralib.newlist(),
     _functions  = terralib.newlist(),
 
+    _auto_part_fld = nil,
     _incoming_refs = {}, -- used for walking reference graph
   },
   Relation)
@@ -187,6 +188,9 @@ function Relation:Fields()
 end
 function Relation:Divisions()
   return self._divisions
+end
+function Relation:autoPartitionField()
+  return self._auto_part_fld
 end
 function Relation:Dims()
   if not self:isGrid() then
@@ -485,6 +489,30 @@ function Relation:NewField (name, typ)
   M.decls():insert(M.AST.NewField(field))
 
   return field
+end
+
+function Field:autoPartitionByPreimage()
+  if self._owner:isGrid() then
+    error("Auto-partitioning not supported for grid-typed relations", 2)
+  end
+  if not self._type:iskey() then
+    error("Preimage auto-partitioning requires a key-typed field", 2)
+  end
+  rawset(self._owner, '_auto_part_fld', self)
+  -- check for cycles
+  local visited = {} -- set(Relation)
+  local rel = self._owner
+  while true do
+    if visited[rel] then
+      error("Detected cycle in auto-partition directives", 2)
+    end
+    visited[rel] = true
+    if rel._auto_part_fld then
+      rel = rel._auto_part_fld:Type().relation
+    else
+      break
+    end
+  end
 end
 
 -------------------------------------------------------------------------------
