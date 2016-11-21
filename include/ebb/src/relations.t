@@ -1,23 +1,23 @@
 -- The MIT License (MIT)
--- 
+--
 -- Copyright (c) 2015 Stanford University.
 -- All rights reserved.
--- 
+--
 -- Permission is hereby granted, free of charge, to any person obtaining a
 -- copy of this software and associated documentation files (the "Software"),
 -- to deal in the Software without restriction, including without limitation
 -- the rights to use, copy, modify, merge, publish, distribute, sublicense,
 -- and/or sell copies of the Software, and to permit persons to whom the
 -- Software is furnished to do so, subject to the following conditions:
--- 
+--
 -- The above copyright notice and this permission notice shall be included
 -- in all copies or substantial portions of the Software.
--- 
+--
 -- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 -- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 -- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 -- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
--- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
+-- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 -- FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 -- DEALINGS IN THE SOFTWARE.
 
@@ -113,9 +113,9 @@ function R.NewRelation(params)
   end
   local mode = params.mode or 'PLAIN'
   if not params.mode and params.dims then mode = 'GRID' end
-  if mode ~= 'PLAIN' and mode ~= 'GRID'  and mode ~= 'ELASTIC' then
+  if mode ~= 'PLAIN' and mode ~= 'GRID' then
     error("NewRelation(): Bad 'mode' argument.  Was expecting\n"..
-          "  PLAIN, GRID, or ELASTIC", 2)
+          "  PLAIN or GRID", 2)
   end
   if mode == 'GRID' then
     if type(params.dims) ~= 'table' or
@@ -146,7 +146,7 @@ function R.NewRelation(params)
     _uid        = relation_uid,
 
     _fields     = terralib.newlist(),
-    _partitions = terralib.newlist(),
+    _divisions  = terralib.newlist(),
     _macros     = terralib.newlist(),
     _functions  = terralib.newlist(),
 
@@ -185,8 +185,8 @@ end
 function Relation:Fields()
   return self._fields
 end
-function Relation:Partitions()
-  return self._partitions
+function Relation:Divisions()
+  return self._divisions
 end
 function Relation:Dims()
   if not self:isGrid() then
@@ -370,14 +370,14 @@ local function is_subrectangle(rel, obj)
   return true
 end
 
-function Relation:NewPartition( rects )
+function Relation:NewDivision( rects )
   if not self:isGrid() then
-    error("NewPartition(): Can only be called on grid-typed relations", 2)
+    error("NewDivision(): Can only be called on grid-typed relations", 2)
   end
-  local partition = terralib.newlist()
+  local division = terralib.newlist()
   for name,rect in pairs(rects) do
     if type(name) ~= "string" then
-      error("NewPartition(): Subset names must be strings", 2)
+      error("NewDivision(): Subset names must be strings", 2)
     end
     if not is_valid_lua_identifier(name) then
       error(valid_name_err_msg.subset, 2)
@@ -387,7 +387,7 @@ function Relation:NewPartition( rects )
               "That name is already being used.", 2)
     end
     if not type(rect) == 'table' or not terralib.israwlist(rect) then
-      error("NewPartition(): Rectangles must be lists", 2)
+      error("NewDivision(): Rectangles must be lists", 2)
     end
     if is_subrectangle(self, rect) then
       local subset = setmetatable({
@@ -396,10 +396,10 @@ function Relation:NewPartition( rects )
         _rectangle = rect,
       }, Subset)
       rawset(self, name, subset)
-      partition:insert(subset)
+      division:insert(subset)
     end
     --if not is_subrectangle(self, rect) then
-    --  error("NewPartition(): Rectangle was not a list of "..(#self:Dims())..
+    --  error("NewDivision(): Rectangle was not a list of "..(#self:Dims())..
     --        " range pairs lying inside the grid", 2)
     --end
     ---- TODO: Assuming the rectangles are disjoint, and cover the entire grid.
@@ -409,10 +409,10 @@ function Relation:NewPartition( rects )
     --  _rectangle = rect,
     --}, Subset)
     --rawset(self, name, subset)
-    --partition:insert(subset)
+    --division:insert(subset)
   end
-  self._partitions:insert(partition)
-  M.decls():insert(M.AST.NewPartition(partition))
+  self._divisions:insert(division)
+  M.decls():insert(M.AST.NewDivision(division))
 end
 
 
@@ -447,7 +447,7 @@ function Field:Relation()
   return self._owner
 end
 
-function Relation:NewField (name, typ)  
+function Relation:NewField (name, typ)
   if not name or type(name) ~= "string" then
     error("NewField() expects a string as the first argument", 2)
   end
@@ -458,7 +458,7 @@ function Relation:NewField (name, typ)
     error("Cannot create a new field with name '"..name.."'  "..
           "That name is already being used.", 2)
   end
-  
+
   if is_relation(typ) then
     typ = keyT(typ)
   end

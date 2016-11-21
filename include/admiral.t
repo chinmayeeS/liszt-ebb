@@ -1588,7 +1588,7 @@ function A.translateAndRun(mapper_registration, link_flags)
       globalInits[decl.global] = decl.init
     elseif M.AST.NewRelation.check(decl) then
       rels:insert(decl.rel)
-    elseif M.AST.NewPartition.check(decl) then
+    elseif M.AST.NewDivision.check(decl) then
       -- Do nothing
     else assert(false) end
   end
@@ -1605,14 +1605,14 @@ function A.translateAndRun(mapper_registration, link_flags)
     stmts:insert(rquote
       var [rg] = [rel:mkRegionInit()]
     end)
-    for _,part in ipairs(rel:Partitions()) do
+    for _,div in ipairs(rel:Divisions()) do
       local colors = RG.newsymbol(nil, 'colors')
       local coloring = RG.newsymbol(nil, 'coloring')
       stmts:insert(rquote
-        var [colors] = ispace(int1d, [#part])
+        var [colors] = ispace(int1d, [#div])
         var [coloring] = RG.c.legion_domain_point_coloring_create()
       end)
-      for i,subset in ipairs(part) do
+      for i,subset in ipairs(div) do
         local rect = subset:Rectangle() -- int[1-3][2]
         local rectExpr =
           (#rect == 1) and rexpr
@@ -1638,7 +1638,7 @@ function A.translateAndRun(mapper_registration, link_flags)
       stmts:insert(rquote
         var [p] = partition(disjoint, rg, coloring, colors)
       end)
-      for i,subset in ipairs(part) do
+      for i,subset in ipairs(div) do
         local subrg = RG.newsymbol(nil, idSanitize(subset:FullName()))
         ctxt.subsetMap[subset] = subrg
         stmts:insert(rquote

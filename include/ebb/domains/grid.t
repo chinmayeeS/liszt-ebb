@@ -125,7 +125,7 @@ local function setup2dCells(grid)
                                  {0,1,y}}, c)                   end))
 
   -- Boundary/Interior subsets
-  cells:NewPartition(rectangles_2d(Cx, Cy, xn_bd, yn_bd))
+  cells:NewDivision(rectangles_2d(Cx, Cy, xn_bd, yn_bd))
 
   cells:NewFieldReadFunction('center', ebb (c)
     return L.vec2d({ xo + xw * (L.double(L.xid(c)) + 0.5),
@@ -235,7 +235,7 @@ local function setup2dVertices(grid)
                                  {0,1,y}}, v)                   end))
 
   -- Boundary/Interior subsets
-  verts:NewPartition(rectangles_2d(Vx, Vy, xn_bd, yn_bd))
+  verts:NewDivision(rectangles_2d(Vx, Vy, xn_bd, yn_bd))
 
   -- boundary depths
   verts:NewFieldMacro('xneg_depth', L.Macro(function(v)
@@ -533,7 +533,7 @@ local function setup3dCells(grid)
                                    {0,0,1,z}}, c)               end))
 
   -- Boundary/Interior subsets
-  cells:NewPartition(rectangles_3d(Cx, Cy, Cz, xn_bd, yn_bd, zn_bd))
+  cells:NewDivision(rectangles_3d(Cx, Cy, Cz, xn_bd, yn_bd, zn_bd))
 
   cells:NewFieldReadFunction('center', ebb(c)
     return L.vec3d({ xo + xw * (L.double(L.xid(c)) + 0.5),
@@ -668,7 +668,7 @@ local function setup3dVertices(grid)
                                    {0,0,1,z}}, v)               end))
 
   -- Boundary/Interior subsets
-  verts:NewPartition(rectangles_3d(Vx, Vy, Vz, xn_bd, yn_bd, zn_bd))
+  verts:NewDivision(rectangles_3d(Vx, Vy, Vz, xn_bd, yn_bd, zn_bd))
 
   -- boundary depths
   verts:NewFieldMacro('xneg_depth', L.Macro(function(v)
