@@ -38,6 +38,8 @@ local RG  = regentlib
 local S   = require 'ebb.src.semant'
 local T   = require 'ebb.src.types'
 
+local newlist = terralib.newlist
+
 -------------------------------------------------------------------------------
 -- Parse config options
 -------------------------------------------------------------------------------
@@ -64,7 +66,7 @@ if USE_HDF then
   end
 end
 
-local LIBS = terralib.newlist({'-lm'})
+local LIBS = newlist({'-lm'})
 if USE_HDF then
   if exists('/usr/include/hdf5/serial') then
     terralib.linklibrary('libhdf5_serial.so')
@@ -82,7 +84,7 @@ local function primPartDims()
     return tonumber(NX),tonumber(NY),tonumber(NZ)
   end
   local num = assert(tonumber(dop))
-  local factors = terralib.newlist()
+  local factors = newlist()
   while num > 1 do
     for p = 2, num do
       if num % p == 0 then
@@ -246,7 +248,7 @@ local function setFunName(fun, name)
   fun:setname(name)
 end
 
-local TerraList = getmetatable(terralib.newlist())
+local TerraList = getmetatable(newlist())
 
 -- () -> T*
 function TerraList:copy()
@@ -287,7 +289,7 @@ end
 
 -- () -> T*
 function TerraList:reverse()
-  local res = terralib.newlist()
+  local res = newlist()
   for i = #self, 1, -1 do
     res:insert(self[i])
   end
@@ -314,7 +316,7 @@ end)
 local emitDotProduct = terralib.memoize(function(T, N)
   local a = symbol(Vector(T,N), 'a')
   local b = symbol(Vector(T,N), 'b')
-  local elems = terralib.newlist()
+  local elems = newlist()
   local expr = `(a[0] * b[0])
   for i=1,N-1 do
     expr = `expr + (a[ [i] ] * b[ [i] ])
@@ -331,7 +333,7 @@ end)
 local emitVectorVectorOp = terralib.memoize(function(op, T, N)
   local a = symbol(Vector(T,N), 'a')
   local b = symbol(Vector(T,N), 'b')
-  local elems = terralib.newlist()
+  local elems = newlist()
   for i=0,N-1 do
     elems:insert((op == '+') and (`a[ [i] ] + b[ [i] ]) or
                  (op == '-') and (`a[ [i] ] - b[ [i] ]) or
@@ -352,7 +354,7 @@ end)
 local emitVectorScalarOp = terralib.memoize(function(op, T, N)
   local a = symbol(Vector(T,N), 'a')
   local b = symbol(T, 'b')
-  local elems = terralib.newlist()
+  local elems = newlist()
   for i=0,N-1 do
     elems:insert((op == '+') and (`a[ [i] ] + b) or
                  (op == '-') and (`a[ [i] ] - b) or
@@ -455,9 +457,7 @@ local function toRConst(lit, typ)
     assert(#lit == typ.N)
     return emitVectorCtor(
       toRType(typ.type),
-      terralib.newlist(lit):map(function(e)
-        return toRConst(e, typ.type)
-      end))
+      newlist(lit):map(function(e) return toRConst(e, typ.type) end))
   else assert(false) end
 end
 
@@ -466,7 +466,7 @@ local function emitReduce(op, typ, lval, exp)
   if typ:isvector() then
     local tmp = RG.newsymbol(toRType(typ), 'tmp')
     local v = RG.newsymbol(toRType(typ), 'v')
-    local stmts = terralib.newlist()
+    local stmts = newlist()
     stmts:insert(rquote var [tmp] = exp end)
     stmts:insert(rquote var [v] = lval end)
     for i=0,typ.N-1 do
@@ -618,21 +618,21 @@ FunContext.__index = FunContext
 function FunContext.New(info, argNames, argTypes)
   local self = setmetatable({
     -- Symbol mappings
-    localMap        = {},                 -- map(AST.Symbol, RG.rexpr)
-    globalMap       = {},                 -- map(L.Global, RG.symbol)
-    relMap          = {},                 -- map(R.Relation, RG.symbol)
+    localMap        = {},        -- map(AST.Symbol, RG.rexpr)
+    globalMap       = {},        -- map(L.Global, RG.symbol)
+    relMap          = {},        -- map(R.Relation, RG.symbol)
     -- Signature information
-    domainSym       = nil,                -- RG.Symbol?
-    domainRel       = nil,                -- R.Relation?
-    args            = terralib.newlist(), -- RG.Symbol*
-    accessedRels    = terralib.newlist(), -- R.Relation*
-    readGlobals     = terralib.newlist(), -- L.Global*
+    domainSym       = nil,       -- RG.Symbol?
+    domainRel       = nil,       -- R.Relation?
+    args            = newlist(), -- RG.Symbol*
+    accessedRels    = newlist(), -- R.Relation*
+    readGlobals     = newlist(), -- L.Global*
     -- Field use information
-    privileges      = terralib.newlist(), -- RG.privilege*
+    privileges      = newlist(), -- RG.privilege*
     -- Global reduction information
-    reducedGlobal   = nil,                -- L.Global?
-    globalReduceAcc = nil,                -- RG.symbol?
-    globalReduceOp  = nil,                -- string?
+    reducedGlobal   = nil,       -- L.Global?
+    globalReduceAcc = nil,       -- RG.symbol?
+    globalReduceOp  = nil,       -- string?
   }, FunContext)
   -- Process mapped relation
   if info.domainRel then
@@ -714,7 +714,7 @@ end
 
 -- () -> RG.symbol*
 function FunContext:signature()
-  local fullArgs = terralib.newlist()
+  local fullArgs = newlist()
   if self.domainRel then
     fullArgs:insert(self.domainSym)
   end
@@ -743,7 +743,7 @@ function AST.UserFunction:toTask(info)
   local ctxt = FunContext.New(info, self.params, self.ptypes)
   assert(not ctxt.reducedGlobal or not self.exp)
   -- Synthesize body
-  local body = terralib.newlist() -- RG.quote*
+  local body = newlist() -- RG.quote*
   if ctxt.reducedGlobal then
     local accInitVal =
       opIdentity(ctxt.globalReduceOp, ctxt.globalReduceAcc:gettype())
@@ -845,11 +845,11 @@ end
 local function recoverHelperCall(expr, ctxt)
   -- expr.orig_func   : F.Function
   -- expr.orig_params : AST.Expression*
-  local argTypes = terralib.newlist(expr.orig_params):map(function(p)
+  local argTypes = newlist(expr.orig_params):map(function(p)
     return p.node_type
   end)
   local hTask, hCtxt = expr.orig_func:toHelperTask(argTypes, ctxt.domainRel)
-  local actualArgs = terralib.newlist()
+  local actualArgs = newlist()
   for i = 1, #expr.orig_params do
     local p = expr.orig_params[i]
     actualArgs:insert(p:toRExpr(ctxt))
@@ -967,7 +967,6 @@ function AST.Call:toRExpr(ctxt)
   -- Key unboxing
   -- self.params[1] : AST.Expression
   if self.func == L.id then
-    -- TODO: Need to do something extra here?
     return self.params[1]:toRExpr(ctxt)
   elseif self.func == L.xid then
     return rexpr [self.params[1]:toRExpr(ctxt)].x end
@@ -1045,7 +1044,7 @@ function AST.Call:toRExpr(ctxt)
   -- Call to terra function
   -- self.params : AST.Expression*
   if self.func.is_a_terra_func then
-    local args = terralib.newlist()
+    local args = newlist()
     for idx = 1, #self.params do
       args:insert(self.params[idx]:toRExpr(ctxt))
     end
@@ -1161,9 +1160,7 @@ function AST.VectorLiteral:toRExpr(ctxt)
   -- self.elems     : AST.Expression*
   return emitVectorCtor(
     toRType(self.node_type.type),
-    terralib.newlist(self.elems):map(function(e)
-      return e:toRExpr(ctxt)
-    end))
+    newlist(self.elems):map(function(e) return e:toRExpr(ctxt) end))
 end
 function AST.Where:toRExpr(ctxt)
   quit(self)
@@ -1280,9 +1277,7 @@ end
 -- FunContext -> RG.rquote
 function AST.Block:toRQuote(ctxt)
   local stmtQuotes =
-    terralib.newlist(self.statements):map(function(stmt)
-      return stmt:toRQuote(ctxt)
-    end)
+    newlist(self.statements):map(function(stmt) return stmt:toRQuote(ctxt) end)
   return rquote
     [stmtQuotes]
   end
@@ -1331,8 +1326,8 @@ if USE_HDF then
       end
       var dataSpace = HDF5.H5Screate_simple([#dims], sizes, [&uint64](0))
       escape
-        local header = terralib.newlist() -- terralib.quote*
-        local footer = terralib.newlist() -- terralib.quote*
+        local header = newlist() -- terralib.quote*
+        local footer = newlist() -- terralib.quote*
         -- terralib.type -> terralib.quote
         local function toHType(T)
           -- TODO: Not supporting: pointers, vectors, non-primitive arrays
@@ -1449,7 +1444,7 @@ end -- if USE_HDF
 
 -- ProgramContext -> RG.rquote
 function R.Relation:emitPrimPartUpdate(ctxt)
-  local fld = assert(self:autoPartitionField())
+  local fld = assert(self:AutoPartitionField())
   local baseRel = fld:Type().relation
   local rg = ctxt.relMap[self]
   local rgPart = ctxt.primPart[self]
@@ -1472,7 +1467,7 @@ function M.AST.Block:toRQuote(ctxt)
 end
 function M.AST.ForEach:toRQuote(ctxt)
   local tsk, fCtxt = self.fun:toKernelTask()
-  local actualArgs = terralib.newlist()
+  local actualArgs = newlist()
   local domArg = self.subset
     and ctxt.subsetMap[self.subset]
     or ctxt.relMap[self.rel]
@@ -1497,9 +1492,9 @@ function M.AST.ForEach:toRQuote(ctxt)
       (op == 'min') and rquote [retSym] min= [callExpr] end or
       assert(false)
   end
-  local quotes = terralib.newlist({callQuote})
+  local quotes = newlist({callQuote})
   local info = self.fun:_get_typechecked(42, self.rel, {})
-  local pt = info.field_use[self.rel:autoPartitionField()]
+  local pt = info.field_use[self.rel:AutoPartitionField()]
   if pt and pt.write then
     quotes:insert(self.rel:emitPrimPartUpdate(ctxt))
   end
@@ -1528,8 +1523,8 @@ function M.AST.FillField:toRQuote(ctxt)
   local fillQuote = rquote
     fill(rg.[self.fld:Name()], [toRConst(self.val, self.fld:Type())])
   end
-  local quotes = terralib.newlist({fillQuote})
-  if self.fld == rel:autoPartitionField() then
+  local quotes = newlist({fillQuote})
+  if self.fld == rel:AutoPartitionField() then
     quotes:insert(rel:emitPrimPartUpdate(ctxt))
   end
   return rquote [quotes] end
@@ -1577,7 +1572,7 @@ function M.AST.Load:toRQuote(ctxt)
   local relSym = ctxt.relMap[self.rel]
   local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
   local primPartUpdQuote = rquote end
-  if self.flds:find(self.rel:autoPartitionField()) then
+  if self.flds:find(self.rel:AutoPartitionField()) then
     primPartUpdQuote = self.rel:emitPrimPartUpdate(ctxt)
   end
   return rquote
@@ -1650,7 +1645,7 @@ end
 -- (()->())?, (string*)? -> ()
 function A.translateAndRun(mapper_registration, link_flags)
   if DEBUG then print('import "regent"') end
-  local stmts = terralib.newlist()
+  local stmts = newlist()
   local ctxt = { -- ProgramContext
     globalMap  = {}, -- map(L.Global, RG.symbol)
     relMap     = {}, -- map(R.Relation, RG.symbol)
@@ -1659,7 +1654,7 @@ function A.translateAndRun(mapper_registration, link_flags)
   }
   -- Collect declarations
   local globalInits = {} -- map(L.Global, M.ExprConst)
-  local rels = terralib.newlist() -- R.Relation*
+  local rels = newlist() -- R.Relation*
   for _,decl in ipairs(M.decls()) do
     if M.AST.NewField.check(decl) then
       -- Do nothing
@@ -1759,7 +1754,7 @@ function A.translateAndRun(mapper_registration, link_flags)
   end
   if SAVEOBJ then
     print('Saving executable to '..OBJNAME)
-    link_flags = link_flags or terralib.newlist()
+    link_flags = link_flags or newlist()
     for idx = 1, #LIBS do
       link_flags[#link_flags + 1] = LIBS[idx]
     end

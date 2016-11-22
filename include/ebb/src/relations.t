@@ -124,15 +124,6 @@ function R.NewRelation(params)
       error("NewRelation(): Grids must specify 'dim' argument; "..
             "a table of 2 to 3 numbers specifying grid size", 2)
     end
-    if params.periodic then
-      if type(params.periodic) ~= 'table' then
-        error("NewRelation(): 'periodic' argument must be a list", 2)
-      elseif #params.periodic ~= #params.dims then
-        error("NewRelation(): periodicity is specified for "..
-              tostring(#params.periodic).." dimensions; does not match "..
-              tostring(#params.dims).." dimensions specified", 2)
-      end
-    end
   else
     if type(params.size) ~= 'number' then
       error("NewRelation() expects 'size' numeric argument", 2)
@@ -161,12 +152,9 @@ function R.NewRelation(params)
   if mode == 'GRID' then
     size = 1
     rawset(rel, '_dims', {})
-    rawset(rel, '_periodic', {})
     for i,n in ipairs(params.dims) do
       rel._dims[i]    = n
       size            = size * n
-      if params.periodic and params.periodic[i] then rel._periodic = true
-                                                else rel._periodic = false end
     end
   end
   rawset(rel, '_logical_size',  size)
@@ -183,13 +171,16 @@ end
 function Relation:Name()
   return self._name
 end
+function Relation:Mode()
+  return self._mode
+end
 function Relation:Fields()
   return self._fields
 end
 function Relation:Divisions()
   return self._divisions
 end
-function Relation:autoPartitionField()
+function Relation:AutoPartitionField()
   return self._auto_part_fld
 end
 function Relation:Dims()
@@ -220,7 +211,7 @@ function Relation:__newindex(fieldname,value)
       "(did you mean to call relation:New...?)", 2)
 end
 
-function Relation:NewFieldMacro (name, macro)
+function Relation:NewFieldMacro(name, macro)
   if not name or type(name) ~= "string" then
     error("NewFieldMacro() expects a string as the first argument", 2)
   end
@@ -451,7 +442,7 @@ function Field:Relation()
   return self._owner
 end
 
-function Relation:NewField (name, typ)
+function Relation:NewField(name, typ)
   if not name or type(name) ~= "string" then
     error("NewField() expects a string as the first argument", 2)
   end
@@ -491,7 +482,7 @@ function Relation:NewField (name, typ)
   return field
 end
 
-function Field:autoPartitionByPreimage()
+function Field:AutoPartitionByPreimage()
   if self._owner:isGrid() then
     error("Auto-partitioning not supported for grid-typed relations", 2)
   end
