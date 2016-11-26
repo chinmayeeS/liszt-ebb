@@ -1534,6 +1534,13 @@ function M.AST.FillField:toRQuote(ctxt)
   end
   return rquote [quotes] end
 end
+function M.AST.FillField:toRQuoteInlined(ctxt, rg)
+  return rquote
+    for e in [rg] do
+      e.[self.fld:Name()] = [toRConst(self.val, self.fld:Type())]
+    end
+  end
+end
 function M.AST.SetGlobal:toRQuote(ctxt)
   return rquote
     [ctxt.globalMap[self.global]] = [self.expr:toRExpr(ctxt)]
@@ -1647,6 +1654,38 @@ function M.AST.UnaryOp:toRExpr(ctxt)
     assert(false)
 end
 
+local function makeFillTasks(ctxt, fillStmts)
+  local fillsPerRelation = {}
+  local fillTasks = {}
+  local relationSymbols = {}
+  for _,s in ipairs(fillStmts) do
+    local rel = s.fld:Relation()
+    local stmts = fillsPerRelation[rel] or terralib.newlist()
+    stmts:insert(s)
+    fillsPerRelation[rel] = stmts
+    relationSymbols[rel] = RG.newsymbol(rel:regionType(), rel:Name())
+  end
+  for rel,fills in pairs(fillsPerRelation) do
+    local rg = relationSymbols[rel]
+    local privileges = terralib.newlist()
+    privileges:insert(RG.privilege(RG.reads, rg))
+    privileges:insert(RG.privilege(RG.writes, rg))
+    local fillTask
+    __demand(__parallel)
+    task fillTask([rg]) where [privileges] do
+      [fills:map(function(fill) return fill:toRQuoteInlined(ctxt, rg) end)]
+    end
+    setTaskName(fillTask, "fillTask_" .. rel:Name())
+    fillTasks[rel] = fillTask
+  end
+
+  local fillTaskCalls = terralib.newlist()
+  for rel,t in pairs(fillTasks) do
+    fillTaskCalls:insert(rquote [t]([ ctxt.relMap[rel] ]) end)
+  end
+  return fillTaskCalls
+end
+
 -- (()->())?, (string*)? -> ()
 function A.translateAndRun(mapper_registration, link_flags)
   if DEBUG then print('import "regent"') end
@@ -1744,9 +1783,19 @@ function A.translateAndRun(mapper_registration, link_flags)
       var [p] = partition(equal, rg, primColors)
     end)
   end
+  local fillStmts = terralib.newlist()
+  for _,s in ipairs(M.stmts()) do
+    if M.AST.FillField.check(s) then
+      fillStmts:insert(s)
+    end
+  end
+  stmts:insertall(makeFillTasks(ctxt, fillStmts))
+
   -- Process statements
   for _,s in ipairs(M.stmts()) do
-    stmts:insert(s:toRQuote(ctxt))
+    if not M.AST.FillField.check(s) then
+      stmts:insert(s:toRQuote(ctxt))
+    end
   end
   -- Synthesize main task
   local task main()
