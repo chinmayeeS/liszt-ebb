@@ -505,6 +505,7 @@ end
 
 -- () -> RG.index_type
 function R.Relation:indexType()
+  if not self:isGrid() then return ptr end
   local dims = self:Dims()
   return
     (#dims == 1) and int1d or
@@ -581,6 +582,9 @@ end
 function R.Relation:mkISpaceInit()
   local dims = self:Dims()
   return
+    (not self:isGrid()) and rexpr
+      ispace(ptr, [dims[1]])
+    end or
     (#dims == 1) and rexpr
       ispace(int1d, [dims[1]])
     end or
@@ -598,6 +602,12 @@ function R.Relation:mkRegionInit()
   local ispaceExpr = self:mkISpaceInit()
   local fspaceExpr = self:fieldSpace()
   return rexpr region(ispaceExpr, fspaceExpr) end
+end
+
+function R.Relation:mkPtrInit(rg)
+  local fspaceExpr = self:fieldSpace()
+  local dims = self:Dims()
+  return rquote new(ptr(fspaceExpr, rg), [dims[1]]) end
 end
 
 -------------------------------------------------------------------------------
@@ -1686,6 +1696,9 @@ function A.translateAndRun(mapper_registration, link_flags)
     stmts:insert(rquote
       var [rg] = [rel:mkRegionInit()]
     end)
+    if not rel:isGrid() then
+      stmts:insert(rel:mkPtrInit(rg))
+    end
     for _,div in ipairs(rel:Divisions()) do
       local colors = RG.newsymbol(nil, 'colors')
       local coloring = RG.newsymbol(nil, 'coloring')
