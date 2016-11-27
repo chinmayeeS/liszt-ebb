@@ -1681,9 +1681,16 @@ local function makeFillTasks(ctxt, fillStmts)
     privileges:insert(RG.privilege(RG.reads, rg))
     privileges:insert(RG.privilege(RG.writes, rg))
     local fillTask
-    __demand(__parallel)
-    task fillTask([rg]) where [privileges] do
-      [fills:map(function(fill) return fill:toRQuoteInlined(ctxt, rg) end)]
+    if RG.check_cuda_available() then
+      __demand(__parallel, __cuda)
+      task fillTask([rg]) where [privileges] do
+        [fills:map(function(fill) return fill:toRQuoteInlined(ctxt, rg) end)]
+      end
+    else
+      __demand(__parallel)
+      task fillTask([rg]) where [privileges] do
+        [fills:map(function(fill) return fill:toRQuoteInlined(ctxt, rg) end)]
+      end
     end
     setTaskName(fillTask, "fillTask_" .. rel:Name())
     fillTasks[rel] = fillTask
