@@ -55,6 +55,8 @@ local OBJNAME = os.getenv('OBJNAME') or 'a.out'
 
 local USE_HDF = not (os.getenv('USE_HDF') == '0')
 
+local USE_LEGION_FILL = os.getenv('USE_LEGION_FILL') == '1'
+
 local HDF_HEADER
 if USE_HDF then
   if exists('/usr/include/hdf5/serial') then
@@ -1803,17 +1805,20 @@ function A.translateAndRun(mapper_registration, link_flags)
       var [p] = partition(equal, rg, primColors)
     end)
   end
-  local fillStmts = terralib.newlist()
-  for _,s in ipairs(M.stmts()) do
-    if M.AST.FillField.check(s) then
-      fillStmts:insert(s)
+
+  if not USE_LEGION_FILL then
+    local fillStmts = terralib.newlist()
+    for _,s in ipairs(M.stmts()) do
+      if M.AST.FillField.check(s) then
+        fillStmts:insert(s)
+      end
     end
+    stmts:insertall(makeFillTasks(ctxt, fillStmts))
   end
-  stmts:insertall(makeFillTasks(ctxt, fillStmts))
 
   -- Process statements
   for _,s in ipairs(M.stmts()) do
-    if not M.AST.FillField.check(s) then
+    if USE_LEGION_FILL or not M.AST.FillField.check(s) then
       stmts:insert(s:toRQuote(ctxt))
     end
   end
