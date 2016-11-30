@@ -103,6 +103,7 @@ local function primPartDims()
   return NX,NY,NZ
 end
 local PRIM_PART_NX,PRIM_PART_NY,PRIM_PART_NZ = primPartDims()
+A.primPartDims = primPartDims
 
 -------------------------------------------------------------------------------
 -- Helper functions
