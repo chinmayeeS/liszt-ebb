@@ -1063,6 +1063,48 @@ function AST.Call:toRExpr(ctxt)
     end
     return rexpr [self.func.terrafn]([args]) end
   end
+
+  if self.func == L.print then
+    local args = terralib.newlist()
+    for idx = 1, #self.params do
+      local arg = self.params[idx]:toRExpr(ctxt)
+      if not self.params[idx].node_type:isvector() then
+        args:insert(arg)
+      else
+        args:insert(rexpr [arg][0] end)
+        args:insert(rexpr [arg][1] end)
+        args:insert(rexpr [arg][2] end)
+      end
+    end
+    local fmt = ""
+    for idx = 1, #self.params do
+      local ty = self.params[idx].node_type
+      if not ty:isvector() then
+        if ty == L.uint64 then
+          fmt = fmt .. "%lu "
+        else
+          fmt = fmt .. "%f "
+        end
+      else
+        local val_fmt
+        if ty.type == L.uint64 then
+          val_fmt = "%lu"
+        else
+          val_fmt = "%f"
+        end
+        fmt = fmt .. "("
+        for idx = 1, ty.N do
+          fmt = fmt .. val_fmt
+          if idx ~= ty.N then
+            fmt = fmt .. ", "
+          end
+        end
+        fmt = fmt .. ") "
+      end
+    end
+    fmt = fmt .. "\n"
+    return rexpr C.printf([fmt], [args]) end
+  end
   -- TODO: Not covered: L.print, L.cross, L.length
   assert(false)
 end
