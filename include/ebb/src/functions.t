@@ -32,7 +32,6 @@ local R                 = require 'ebb.src.relations'
 local specialization    = require 'ebb.src.specialization'
 local semant            = require 'ebb.src.semant'
 local phase             = require 'ebb.src.phase'
-local stencil           = require 'ebb.src.stencil'
 local M                 = require "ebb.src.main"
 
 local function shallowcopy_table(tbl)
@@ -101,19 +100,8 @@ function GetAllFieldAndGlobalUses(params)
   local relation  = R.is_subset(relset) and relset:Relation() or relset
 
 
-  -- VERIFY SET OF FIELDS IN PHASE_RESULTS AND FIELD_ACCESSES MATCH
-  for f, _ in pairs(params.phase_results.field_use) do
-    assert(params.field_accesses[f], "ERROR: field " .. f:Name() ..
-           " in field uses but not in field accesses.")
-  end
-  for f, _ in pairs(params.field_accesses) do
-    assert(params.phase_results.field_use[f], "ERROR: field " .. f:Name() ..
-           " in field accesses but not in field use.")
-  end
-
   local data = {
     field_use         = shallowcopy_table(params.phase_results.field_use),
-    field_accesses    = shallowcopy_table(params.field_accesses),
     global_use        = shallowcopy_table(params.phase_results.global_use),
     global_reductions = {},
   }
@@ -157,18 +145,15 @@ Util.memoize_from(2, function(calldepth, ufunc, relset, ...)
   -- now actually type and phase check
   local typed_ast       = semant.check( aname_ast )
   local phase_results   = phase.phasePass( typed_ast )
-  local field_accesses  = stencil.stencilPass( typed_ast )
 
   local f_g_uses      = GetAllFieldAndGlobalUses {
     relset         = relset,
     phase_results  = phase_results,
-    field_accesses = field_accesses,
   }
 
   return {
     typed_ast       = typed_ast,
     field_use       = f_g_uses.field_use,
-    field_accesses  = f_g_uses.field_accesses,
     global_use      = f_g_uses.global_use,
     versions        = terralib.newlist(),
   }
