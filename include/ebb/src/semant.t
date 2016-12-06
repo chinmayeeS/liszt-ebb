@@ -1,23 +1,23 @@
 -- The MIT License (MIT)
--- 
+--
 -- Copyright (c) 2015 Stanford University.
 -- All rights reserved.
--- 
+--
 -- Permission is hereby granted, free of charge, to any person obtaining a
 -- copy of this software and associated documentation files (the "Software"),
 -- to deal in the Software without restriction, including without limitation
 -- the rights to use, copy, modify, merge, publish, distribute, sublicense,
 -- and/or sell copies of the Software, and to permit persons to whom the
 -- Software is furnished to do so, subject to the following conditions:
--- 
+--
 -- The above copyright notice and this permission notice shall be included
 -- in all copies or substantial portions of the Software.
--- 
+--
 -- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 -- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 -- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 -- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
--- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
+-- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 -- FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 -- DEALINGS IN THE SOFTWARE.
 local S = {}
@@ -745,7 +745,7 @@ local function coerce_base(btyp, node)
   cast.value = node
   return cast
 end
--- Will coerce base type but not the underlying 
+-- Will coerce base type but not the underlying
 local function try_bin_coerce(binop, errf)
   local join = T.type_join(binop.lhs.node_type:basetype(),
                            binop.rhs.node_type:basetype())
@@ -1149,9 +1149,9 @@ end
 ----------------------------
 --[[ AST Alpha-Renaming ]]--
 ----------------------------
-  
+
   ast.NewCopyPass('alpha_rename')
-  
+
   function ast.UserFunction:alpha_rename()
     local symbol_remap = {}
     local func = self:clone()
@@ -1299,14 +1299,14 @@ function ast.TableLookup:check(ctxt)
     local projs = {}
     for i,p in ipairs(ttype.projections) do
       table.insert(projs,p)
-      rel = rel[p]:Type().relation 
+      rel = rel[p]:Type().relation
       assert(rel)
     end
     local field = rel[member]
     if not R.is_field(field) then
       ctxt:error(self, "Relation "..rel:Name()..
                        " does not have field "..member)
-    else 
+    else
       table.insert(projs,member)
     end
     ct.node_type = queryT(ttype.relation,projs)
@@ -1398,7 +1398,7 @@ function ast.SquareIndex:check(ctxt)
   -- Square indices come up in two cases:
   --  1. vector or matrix entries being extracted
   --  2. accessing fields from a key using a string literal
-  
+
   local base  = self.base:check(ctxt)
   if base.node_type:ismatrix() or base.node_type:isvector() then
     return SqIdxVecMat(self, base, ctxt)
@@ -1415,7 +1415,7 @@ end
 
 function ast.Call:check(ctxt)
   local call = self:clone()
-  
+
   call.node_type = errorT -- default
   local func     = self.func:check(ctxt)
   call.params    = {}
@@ -1594,7 +1594,7 @@ function ast.UserFunction:check(ctxt)
   -- will substitute them into the AST directly
   ufunc.params                = { keyparam }
   ufunc.ptypes                = { keytype }
-  
+
   ufunc.relation              = keytype.relation
   ufunc.body                  = self.body:check(ctxt)
 

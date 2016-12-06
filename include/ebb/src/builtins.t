@@ -242,33 +242,25 @@ function B.UNSAFE_ROW.check(ast, ctxt)
         return errorT
     end
 
-    local ret_type = nil
-
     local addr_type = args[1].node_type
     local rel_type = args[2].node_type
     if not rel_type:isinternal() or not R.is_relation(rel_type.value) then
         ctxt:error(ast, "UNSAFE_ROW expected a relation as the second arg")
-        ret_type = errorT
+        return errorT
     end
     local rel = rel_type.value
     local ndim = #rel:Dims()
-    --if rel:isGrid() then
-    --    ctxt:error(ast, "UNSAFE_ROW cannot generate keys into a grid")
-    --    ret_type = errorT
-    --end
     if ndim == 1 and addr_type ~= uint64T then
         ctxt:error(ast, "UNSAFE_ROW expected a uint64 as the first arg")
-        ret_type = errorT
+        return errorT
     elseif ndim > 1  and addr_type ~= vectorT(uint64T,ndim) then
         ctxt:error(ast, "UNSAFE_ROW expected a vector of "..ndim..
                         " uint64 values")
+        return errorT
     end
 
     -- actual typing
-    if not ret_type then
-        ret_type = keyT(rel_type.value)
-    end
-    return ret_type
+    return keyT(rel)
 end
 
 

@@ -183,8 +183,9 @@ function M.ELSE()
   scopes[#scopes] = terralib.newlist()
 end
 
--- boolean | AST.Cond -> ()
+-- boolean | AST.Cond, boolean? -> ()
 function M.WHILE(cond, spmd)
+  spmd = spmd or false
   if type(cond) == 'boolean' then cond = AST.Literal(cond) end
   stack:insert(AST.While(cond, spmd, nil))
   scopes:insert(terralib.newlist())

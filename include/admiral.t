@@ -44,7 +44,7 @@ local newlist = terralib.newlist
 -- Parse config options
 -------------------------------------------------------------------------------
 
--- string -> boolean
+-- string -> bool
 local function exists(filename)
   return os.rename(filename, filename) and true or false
 end
@@ -78,7 +78,7 @@ if USE_HDF then
 end
 
 local function primPartDims()
-  local dop = RG.config["parallelize-dop"]
+  local dop = RG.config['parallelize-dop']
   local NX,NY,NZ = dop:match('^(%d+),(%d+),(%d+)$')
   if NX then
     return tonumber(NX),tonumber(NY),tonumber(NZ)
@@ -380,7 +380,7 @@ end
 -- Translation helper functions
 -------------------------------------------------------------------------------
 
--- () -> boolean
+-- () -> bool
 function F.Function:isKernel()
   return (#self._decl_ast.params == 1 and
           self._decl_ast.ptypes[1]:iskey() and
@@ -524,11 +524,11 @@ R.Relation.emitVectorToIndexType = terralib.memoize(function(self)
     end
   elseif #dims == 2 then
     terra vec2idx(v : uint64[2])
-      return [indexType]({__ptr = [indexType.impl_type] {v[0], v[1]}})
+      return [indexType]({__ptr = [indexType.impl_type]{v[0], v[1]}})
     end
   elseif #dims == 3 then
     terra vec2idx(v : uint64[3])
-      return [indexType]({__ptr = [indexType.impl_type] {v[0], v[1], v[2]}})
+      return [indexType]({__ptr = [indexType.impl_type]{v[0], v[1], v[2]}})
     end
   else assert(false) end
   setFunName(vec2idx, 'vec'..tostring(#dims)..'d_to_idx')
@@ -766,22 +766,19 @@ function AST.UserFunction:toTask(info)
   if info.domainRel then
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
-    local st
     if not ctxt.reducedGlobal and RG.check_cuda_available() then
-      __demand(__parallel, __cuda) task st([ctxt:signature()]) where
+      __demand(__parallel, __cuda) task tsk([ctxt:signature()]) where
         dom <= univ, [ctxt.privileges]
       do [body] end
     else
-      __demand(__parallel) task st([ctxt:signature()]) where
+      __demand(__parallel) task tsk([ctxt:signature()]) where
         dom <= univ, [ctxt.privileges]
       do [body] end
     end
-    tsk = st
   else
-    local st __demand(__inline) task st([ctxt:signature()]) where
+    __demand(__inline) task tsk([ctxt:signature()]) where
       [ctxt.privileges]
     do [body] end
-    tsk = st
   end
   -- Finalize task
   setTaskName(tsk, info.name)
@@ -815,8 +812,8 @@ end
 
 local TO_HELPER_TASK_CACHE = {} -- map(F.Function, {RG.task,FunContext})
 
--- T.Type*, R.Relation? -> RG.task, FunContext
-function F.Function:toHelperTask(argTypes, callerDom)
+-- T.Type* -> RG.task, FunContext
+function F.Function:toHelperTask(argTypes)
   -- TODO: Only caching on the function object; we assume the helper functions
   -- have a single specialization.
   if TO_HELPER_TASK_CACHE[self] then
@@ -848,7 +845,7 @@ local function recoverHelperCall(expr, ctxt)
   local argTypes = newlist(expr.orig_params):map(function(p)
     return p.node_type
   end)
-  local hTask, hCtxt = expr.orig_func:toHelperTask(argTypes, ctxt.domainRel)
+  local hTask, hCtxt = expr.orig_func:toHelperTask(argTypes)
   local actualArgs = newlist()
   for i = 1, #expr.orig_params do
     local p = expr.orig_params[i]
@@ -1363,13 +1360,13 @@ if USE_HDF then
           else assert(false) end
         end
         -- terralib.struct, set(string), string -> ()
-        local function mkFieldDecls(fs, whitelist, prefix)
+        local function emitFieldDecls(fs, whitelist, prefix)
            -- TODO: Only supporting pure structs, not fspaces
           assert(fs:isstruct())
           for _,fld in ipairs(fs.entries) do
             if whitelist and not whitelist[fld.field] then
             elseif fld.type:isstruct() then
-              mkFieldDecls(fld.type, nil, prefix..fld.field..'.')
+              emitFieldDecls(fld.type, nil, prefix..fld.field..'.')
             else
               local hName = prefix..fld.field
               local hType = toHType(fld.type)
@@ -1385,7 +1382,7 @@ if USE_HDF then
             end
           end
         end
-        mkFieldDecls(fs, flds:toSet(), '')
+        emitFieldDecls(fs, flds:toSet(), '')
         emit quote [header] end
         emit quote [footer:reverse()] end
       end
@@ -1466,7 +1463,9 @@ function M.AST.Block:toRQuote(ctxt)
   end
 end
 function M.AST.ForEach:toRQuote(ctxt)
+  -- Translate kernel to task
   local tsk, fCtxt = self.fun:toKernelTask()
+  -- Collect arguments for call
   local actualArgs = newlist()
   local domArg = self.subset
     and ctxt.subsetMap[self.subset]
@@ -1478,6 +1477,7 @@ function M.AST.ForEach:toRQuote(ctxt)
   for _,g in ipairs(fCtxt.readGlobals) do
     actualArgs:insert(assert(ctxt.globalMap[g]))
   end
+  -- Synthesize call expression
   local callExpr = rexpr [tsk]([actualArgs]) end
   local callQuote = rquote [callExpr] end
   if fCtxt.reducedGlobal then
@@ -1674,7 +1674,7 @@ function A.translateAndRun(mapper_registration, link_flags)
     ctxt.globalMap[g] = x
     stmts:insert(rquote var [x] = [toRConst(val, g:Type())] end)
   end
-  -- Emit region declarations
+  -- Emit region declarations and user-defined divisions
   for _,rel in ipairs(rels) do
     local rg = RG.newsymbol(nil, rel:Name())
     ctxt.relMap[rel] = rg
@@ -1752,6 +1752,7 @@ function A.translateAndRun(mapper_registration, link_flags)
     prettyPrintTask(main)
     print('regentlib.start('..main:getname()[1]..')')
   end
+  -- Emit to executable or run
   if SAVEOBJ then
     print('Saving executable to '..OBJNAME)
     link_flags = link_flags or newlist()
