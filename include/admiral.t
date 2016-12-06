@@ -507,9 +507,10 @@ end
 function R.Relation:indexType()
   local dims = self:Dims()
   return
-    (#dims == 1) and int1d or
-    (#dims == 2) and int2d or
-    (#dims == 3) and int3d or
+    (not self:isGrid()) and ptr   or
+    (#dims == 1)        and int1d or
+    (#dims == 2)        and int2d or
+    (#dims == 3)        and int3d or
     assert(false)
 end
 
@@ -518,7 +519,7 @@ R.Relation.emitVectorToIndexType = terralib.memoize(function(self)
   local dims = self:Dims()
   local indexType = self:indexType()
   local vec2idx
-  if #dims == 1 then
+  if not self:isGrid() or #dims == 1 then
     terra vec2idx(v : uint64[1])
       return [indexType]({__ptr = [indexType.impl_type](v[0])})
     end
@@ -561,7 +562,7 @@ end
 function R.Relation:translateIndex(lit)
   local dims = self:Dims()
   local indexType = self:indexType()
-  if #dims == 1 then
+  if not self:isGrid() or #dims == 1 then
     return rexpr [indexType]([toRConst(lit, L.int)]) end
   elseif #dims == 2 then
     assert(terralib.israwlist(lit))
@@ -578,26 +579,37 @@ function R.Relation:translateIndex(lit)
 end
 
 -- () -> RG.rexpr
-function R.Relation:mkISpaceInit()
+function R.Relation:emitISpaceInit()
   local dims = self:Dims()
+  local indexType = self:indexType()
   return
-    (#dims == 1) and rexpr
-      ispace(int1d, [dims[1]])
+    (not self:isGrid() or #dims == 1) and rexpr
+      ispace(indexType, [dims[1]])
     end or
     (#dims == 2) and rexpr
-      ispace(int2d, { x = [dims[1]], y = [dims[2]] })
+      ispace(indexType, { x = [dims[1]], y = [dims[2]] })
     end or
     (#dims == 3) and rexpr
-      ispace(int3d, { x = [dims[1]], y = [dims[2]], z = [dims[3]] })
+      ispace(indexType, { x = [dims[1]], y = [dims[2]], z = [dims[3]] })
     end or
     assert(false)
 end
 
--- () -> RG.rexpr
-function R.Relation:mkRegionInit()
-  local ispaceExpr = self:mkISpaceInit()
+-- RG.symbol -> RG.rquote
+function R.Relation:emitRegionInit(rg)
+  local ispaceExpr = self:emitISpaceInit()
   local fspaceExpr = self:fieldSpace()
-  return rexpr region(ispaceExpr, fspaceExpr) end
+  local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
+  local allocQuote = rquote end
+  if not self:isGrid() then
+    allocQuote = rquote new(ptr(fspaceExpr, rg), [self:Dims()[1]]) end
+  end
+  local fillQuote = rquote end
+  return rquote
+    [declQuote];
+    [allocQuote];
+    [fillQuote]
+  end
 end
 
 -------------------------------------------------------------------------------
@@ -1395,7 +1407,7 @@ if USE_HDF then
       reads(r.[flds])
     do
       create(filename)
-      var s = region([self:mkISpaceInit()], fs)
+      var s = region([self:emitISpaceInit()], fs)
       attach(hdf5, s.[flds], filename, RG.file_read_write)
       acquire(s.[flds])
       copy(r.[flds], s.[flds])
@@ -1421,7 +1433,7 @@ if USE_HDF then
     where
       reads writes(r.[flds])
     do
-      var s = region([self:mkISpaceInit()], fs)
+      var s = region([self:emitISpaceInit()], fs)
       attach(hdf5, s.[flds], filename, RG.file_read_only)
       acquire(s.[flds])
       copy(s.[flds], r.[flds])
@@ -1678,9 +1690,7 @@ function A.translateAndRun(mapper_registration, link_flags)
   for _,rel in ipairs(rels) do
     local rg = RG.newsymbol(nil, rel:Name())
     ctxt.relMap[rel] = rg
-    stmts:insert(rquote
-      var [rg] = [rel:mkRegionInit()]
-    end)
+    stmts:insert(rel:emitRegionInit(rg))
     for _,div in ipairs(rel:Divisions()) do
       local colors = RG.newsymbol(nil, 'colors')
       local coloring = RG.newsymbol(nil, 'coloring')
