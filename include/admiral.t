@@ -517,6 +517,7 @@ end
 
 -- () -> RG.index_type
 function R.Relation:indexType()
+  if not self:isGrid() then return ptr end
   local dims = self:Dims()
   return
     (not self:isGrid()) and ptr   or
@@ -1403,7 +1404,50 @@ function AST.Call:toRExpr(ctxt)
     end
     return rexpr [self.func.terrafn]([args]) end
   end
-  -- TODO: Not covered: L.print, L.cross, L.length
+  -- Print statement
+  -- self.params : AST.Expression*
+  if self.func == L.print then
+    local args = newlist()
+    for idx = 1, #self.params do
+      local arg = self.params[idx]:toRExpr(ctxt)
+      if not self.params[idx].node_type:isvector() then
+        args:insert(arg)
+      else
+        args:insert(rexpr [arg][0] end)
+        args:insert(rexpr [arg][1] end)
+        args:insert(rexpr [arg][2] end)
+      end
+    end
+    local fmt = ""
+    for idx = 1, #self.params do
+      local ty = self.params[idx].node_type
+      if not ty:isvector() then
+        if ty == L.uint64 then
+          fmt = fmt .. "%lu "
+        else
+          fmt = fmt .. "%f "
+        end
+      else
+        local val_fmt
+        if ty.type == L.uint64 then
+          val_fmt = "%lu"
+        else
+          val_fmt = "%f"
+        end
+        fmt = fmt .. "("
+        for idx = 1, ty.N do
+          fmt = fmt .. val_fmt
+          if idx ~= ty.N then
+            fmt = fmt .. ", "
+          end
+        end
+        fmt = fmt .. ") "
+      end
+    end
+    fmt = fmt .. "\n"
+    return rexpr C.printf([fmt], [args]) end
+  end
+  -- TODO: Not covered: L.cross, L.length
   assert(false)
 end
 function AST.Cast:toRExpr(ctxt)
@@ -1921,7 +1965,6 @@ function M.AST.If:toRQuote(ctxt)
 end
 function M.AST.FillField:toRQuote(ctxt)
   local rel = self.fld:Relation()
-  local rg = ctxt.relMap[rel]
   local primPartQuote = rquote end
   if RG.config['parallelize'] then
     if self.fld == rel:AutoPartitionField() then
@@ -1929,8 +1972,30 @@ function M.AST.FillField:toRQuote(ctxt)
       primPartQuote = rel:emitPrimPartUpdate(ctxt)
     end
   end
+  local fillTask
+  local arg = RG.newsymbol(rel:regionType(), rel:Name())
+  local privileges = newlist()
+  privileges:insert(RG.privilege(RG.reads, arg))
+  privileges:insert(RG.privilege(RG.writes, arg))
+  if RG.check_cuda_available() then
+    __demand(__parallel, __cuda)
+    task fillTask([arg]) where [privileges] do
+      for e in arg do
+        e.[self.fld:Name()] = [toRConst(self.val, self.fld:Type())]
+      end
+    end
+  else
+    __demand(__parallel)
+    task fillTask([arg]) where [privileges] do
+      for e in arg do
+        e.[self.fld:Name()] = [toRConst(self.val, self.fld:Type())]
+      end
+    end
+  end
+  setTaskName(fillTask, rel:Name()..'_'..self.fld:Name()..'_fillTask')
+  if DEBUG then prettyPrintTask(fillTask) end
   return rquote
-    fill(rg.[self.fld:Name()], [toRConst(self.val, self.fld:Type())]);
+    fillTask([ctxt.relMap[rel]]);
     [primPartQuote]
   end
 end
