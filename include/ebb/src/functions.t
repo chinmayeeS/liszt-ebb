@@ -122,6 +122,8 @@ Util.memoize_from(2, function(calldepth, ufunc, relset, ...)
     typed_ast       = typed_ast,
     field_use       = phase_results.field_use,
     global_use      = phase_results.global_use,
+    inserts         = phase_results.inserts,
+    deletes         = phase_results.deletes,
     versions        = terralib.newlist(),
   }
 end)

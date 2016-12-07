@@ -353,7 +353,7 @@ end
 local reductions_by_type = {
   [floatT] = {
     ['+']   = true,
-    --['-']   = true,
+    ['-']   = true,
     ['*']   = true,
     --['/']   = true,
     ['min'] = true,
@@ -361,7 +361,7 @@ local reductions_by_type = {
   },
   [doubleT] = {
     ['+']   = true,
-    --['-']   = true,
+    ['-']   = true,
     ['*']   = true,
     --['/']   = true,
     ['min'] = true,
@@ -371,7 +371,7 @@ local reductions_by_type = {
     ['min'] = true,
     ['max'] = true,
     ['+']   = true,
-    --['-']   = true,
+    ['-']   = true,
     ['*']   = true,
     --['/']   = true,
   },
@@ -379,7 +379,7 @@ local reductions_by_type = {
     ['min'] = true,
     ['max'] = true,
     ['+']   = true,
-    --['-']   = true,
+    ['-']   = true,
     ['*']   = true,
     --['/']   = true,
   },
@@ -627,6 +627,10 @@ function ast.InsertStatement:check(ctxt)
     ctxt:error(self,"Expected a relation to insert into")
     return insert
   end
+  if not rel:isFlexible() then
+    ctxt:error(self, 'Can only insert into flexible relations.')
+    return insert
+  end
   -- check record child
   local record        = self.record:clone()
   insert.record       = record
@@ -655,6 +659,12 @@ function ast.InsertStatement:check(ctxt)
     rectyp_proto[name]  = exp.node_type
     insert.fieldindex[field] = i
   end
+  local autoPartFld = rel:AutoPartitionField()
+  if autoPartFld and not insert.fieldindex[autoPartFld] then
+    ctxt:error(self, "Insert statements on relation "..rel:Name()..
+                     " must include the relation's auto-partition field "..
+                     autoPartFld:Name())
+  end
 
   -- save record type
   record.node_type    = recordT(rectyp_proto)
@@ -673,6 +683,10 @@ function ast.DeleteStatement:check(ctxt)
 
   if not keytyp:isscalarkey() or not delete.key.is_centered then
     ctxt:error(self,"Only centered keys may be deleted")
+    return delete
+  end
+  if not keytyp.relation:isFlexible() then
+    ctxt:error(self, 'Can only delete from flexible relations.')
     return delete
   end
 

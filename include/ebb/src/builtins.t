@@ -93,6 +93,11 @@ function B.id.check(ast, ctxt)
                         "try using xid(), yid() or zid() instead.")
         return errorT
     end
+    if args[1].node_type.relation:isFlexible() then
+        ctxt:error(ast, "Can't access the id() of a flexible relation.")
+        return errorT
+    end
+
 
     return uint64T
 end
@@ -249,6 +254,10 @@ function B.UNSAFE_ROW.check(ast, ctxt)
         return errorT
     end
     local rel = rel_type.value
+    if rel:isFlexible() then
+        ctxt:error(ast, "UNSAFE_ROW can't be used for flexible relations.")
+        return errorT
+    end
     local ndim = #rel:Dims()
     if ndim == 1 and addr_type ~= uint64T then
         ctxt:error(ast, "UNSAFE_ROW expected a uint64 as the first arg")

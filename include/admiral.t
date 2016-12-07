@@ -102,7 +102,8 @@ local function primPartDims()
   end
   return NX,NY,NZ
 end
-local PRIM_PART_NX,PRIM_PART_NY,PRIM_PART_NZ = primPartDims()
+local NX,NY,NZ = primPartDims()
+local NUM_PRIM_PARTS = NX * NY * NZ
 
 -------------------------------------------------------------------------------
 -- Helper functions
@@ -301,6 +302,17 @@ function TerraList:pop()
   local res = self[#self]
   self[#self] = nil
   return res
+end
+
+-- table -> bool
+local function isEmpty(tab)
+  if not tab then
+    return true
+  end
+  for _,_ in pairs(tab) do
+    return false
+  end
+  return true
 end
 
 -------------------------------------------------------------------------------
@@ -548,6 +560,9 @@ R.Relation.fieldSpace = terralib.memoize(function(self)
   for _,fld in ipairs(self:Fields()) do
     fs.entries:insert({field=fld:Name(), type=toRType(fld:Type())})
   end
+  if self:isFlexible() then
+    fs.entries:insert({field='__valid', type=bool})
+  end
   if DEBUG then prettyPrintStruct(fs) end
   return fs
 end)
@@ -578,8 +593,19 @@ function R.Relation:translateIndex(lit)
   else assert(false) end
 end
 
+-- () -> int
+function R.Relation:primPartSize()
+  assert(self:isFlexible() and self:AutoPartitionField())
+  -- In this case, we make sure all sub-partitions are of the same size.
+  return math.ceil(math.ceil(self:Size() / NUM_PRIM_PARTS) * self:MaxSkew())
+end
+
 -- () -> RG.rexpr
 function R.Relation:emitISpaceInit()
+  if RG.config['parallelize'] and self:isFlexible()
+       and self:AutoPartitionField() then
+    return rexpr ispace(ptr, [self:primPartSize()] * NUM_PRIM_PARTS) end
+  end
   local dims = self:Dims()
   local indexType = self:indexType()
   return
@@ -605,10 +631,279 @@ function R.Relation:emitRegionInit(rg)
     allocQuote = rquote new(ptr(fspaceExpr, rg), [self:Dims()[1]]) end
   end
   local fillQuote = rquote end
+  if self:isFlexible() then
+    fillQuote = rquote fill(rg.__valid, false) end
+  end
   return rquote
     [declQuote];
     [allocQuote];
     [fillQuote]
+  end
+end
+
+-- RG.symbol, RG.symbol, RG.symbol -> RG.rquote
+function R.Relation:emitPrimPartInit(r, p, colors)
+  if self:isFlexible() and self:AutoPartitionField() then
+    local primPartSize = self:primPartSize()
+    return rquote
+      var coloring = RG.c.legion_point_coloring_create()
+      for x = 0, NX do
+        for y = 0, NY do
+          for z = 0, NZ do
+            var rBase : int64
+            for rStart in r do
+              rBase = __raw(rStart).value + (x*NY*NZ + y*NZ + z) * primPartSize
+              break
+            end
+            RG.c.legion_point_coloring_add_range(
+              coloring, int3d{x,y,z},
+              [RG.c.legion_ptr_t]{value = rBase},
+              [RG.c.legion_ptr_t]{value = rBase + primPartSize - 1})
+          end
+        end
+      end
+      var [p] = partition(disjoint, r, coloring, colors)
+      RG.c.legion_point_coloring_destroy(coloring)
+    end
+  end
+  return rquote
+    var [p] = partition(equal, r, colors)
+  end
+end
+
+-- () -> RG.task
+R.Relation.emitElemColor = terralib.memoize(function(self)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  local primPartSize = self:primPartSize()
+  local regionType = self:regionType()
+  local fieldSpace = self:fieldSpace()
+  local elemColor __demand(__inline) task elemColor
+    (r : regionType, rPtr : ptr(fieldSpace, r))
+    for rStart in r do
+      var partNum = (__raw(rPtr).value - __raw(rStart).value) / primPartSize
+      var z = partNum % NZ
+      var y = (partNum / NZ) % NY
+      var x = partNum / (NZ * NY)
+      return int3d{x,y,z}
+    end
+  end
+  setTaskName(elemColor, self:Name()..'_elemColor')
+  if DEBUG then prettyPrintTask(elemColor) end
+  return elemColor
+end)
+
+-- () -> int
+function R.Relation:perDirQueueSize()
+  assert(self:isFlexible() and self:AutoPartitionField())
+  return math.ceil(self:primPartSize() * self:MaxXferRate())
+end
+
+-- RG.symbol -> RG.rquote
+function R.Relation:emitQueueInit(q)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  local queueSize = self:perDirQueueSize() * #self:XferStencil()
+  local ispaceExpr = rexpr ispace(ptr, queueSize * NUM_PRIM_PARTS) end
+  local fspaceExpr = self:fieldSpace()
+  return rquote
+    var [q] = region(ispaceExpr, fspaceExpr)
+    new(ptr(fspaceExpr, q), queueSize * NUM_PRIM_PARTS)
+    fill(q.__valid, false)
+  end
+end
+
+-- () -> RG.task
+R.Relation.emitQPartColorOff = terralib.memoize(function(self)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  local qPartIdx = RG.newsymbol(nil, 'qPartIdx')
+  local colorOff = RG.newsymbol(nil, 'colorOff')
+  local conds = newlist()
+  for i,stencil in ipairs(self:XferStencil()) do
+    conds:insert(rquote
+      if qPartIdx == [i-1] then
+        colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
+      end
+    end)
+  end
+  local qPartColorOff __demand(__inline) task qPartColorOff(i : int)
+    var [qPartIdx] = i
+    var [colorOff] = int3d{0,0,0};
+    [conds]
+    -- TODO: Not checking if no case applies.
+    return colorOff
+  end
+  setTaskName(qPartColorOff, self:Name()..'_qPartColorOff')
+  if DEBUG then prettyPrintTask(qPartColorOff) end
+  return qPartColorOff
+end)
+
+-- RG.symbol, RG.symbol, RG.symbol, RG.symbol -> RG.rquote
+function R.Relation:emitQueuePartInit(q, qpsrc, qpdst, colors)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  local perDirQueueSize = self:perDirQueueSize()
+  local qPartColorOff = self:emitQPartColorOff()
+  return rquote
+    var [qpsrc] = partition(equal, q, colors)
+    var coloring = RG.c.legion_point_coloring_create()
+    for c in colors do
+      for qPartIdx = 0, [#self:XferStencil()] do
+        var qPartBase : int64
+        for qBase in qpsrc[(c - qPartColorOff(qPartIdx) + {NX,NY,NZ})
+                           % {NX,NY,NZ}] do
+          qPartBase = __raw(qBase).value + qPartIdx * perDirQueueSize
+          break
+        end
+        RG.c.legion_point_coloring_add_range(
+          coloring, c,
+          [RG.c.legion_ptr_t]{value = qPartBase},
+          [RG.c.legion_ptr_t]{value = qPartBase + perDirQueueSize - 1})
+      end
+    end
+    var [qpdst] = partition(disjoint, q, coloring, colors)
+    RG.c.legion_point_coloring_destroy(coloring)
+  end
+end
+
+-- () -> RG.task
+R.Relation.emitPush = terralib.memoize(function(self)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  local perDirQueueSize = self:perDirQueueSize()
+  local regionType = self:regionType()
+  local fieldSpace = self:fieldSpace()
+  local push __demand(__inline) task push
+    (r        : regionType,
+     rPtr     : ptr(fieldSpace, r),
+     q        : regionType,
+     qPartIdx : int)
+  where
+    reads(r), writes(r.__valid), reads writes(q), r * q
+  do
+    var qPartBase : int64
+    for qBase in q do
+      qPartBase = __raw(qBase).value + qPartIdx * perDirQueueSize
+      break
+    end
+    for qPtr = qPartBase, qPartBase + perDirQueueSize do
+      if not q[qPtr].__valid then
+        q[qPtr] = r[rPtr]
+        rPtr.__valid = false
+        break
+      end
+    end
+    RG.assert(not rPtr.__valid, 'Transfer queue ran out of space')
+  end
+  setTaskName(push, self:Name()..'_push')
+  if DEBUG then prettyPrintTask(push) end
+  return push
+end)
+
+-- () -> RG.task
+R.Relation.emitPushAll = terralib.memoize(function(self)
+  local autoPartFld = self:AutoPartitionField()
+  assert(self:isFlexible() and autoPartFld)
+  local qPartColorOff = self:emitQPartColorOff()
+  local rngElemColor = autoPartFld:Type().relation:emitElemColor()
+  local regionType = self:regionType()
+  local task pushAll(color : int3d, r : regionType, q : regionType)
+  where
+    reads(r), writes(r.__valid), reads writes(q), r * q
+  do
+    for rPtr in r do
+      if rPtr.__valid then
+        var rColor = rngElemColor(rPtr.[autoPartFld])
+        if rColor ~= color then
+          for qPartIdx = 0, [#self:XferStencil()] do
+            if rColor ==
+              (color + qPartColorOff(qPartIdx) + {NX,NY,NZ}) % {NX,NY,NZ} then
+              push(r, rPtr, q,  qPartIdx)
+              break
+            end
+          end
+          RG.assert(not rPtr.__valid, 'Element moved past predicted stencil')
+        end
+      end
+    end
+  end
+  setTaskName(pushAll, self:Name()..'_pushAll')
+  if DEBUG then prettyPrintTask(pushAll) end
+  return pushAll
+end)
+
+-- () -> RG.task
+R.Relation.emitPullAll = terralib.memoize(function(self)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  local regionType = self:regionType()
+  local task pullAll(color : int3d, r : regionType, q : regionType)
+  where
+    reads writes(r), reads(q), writes(q.__valid), r * q
+  do
+    for qPtr in q do
+      -- TODO: Check that the element is coming to the appropriate partition.
+      if qPtr.__valid then
+        for rPtr in r do
+          if not rPtr.__valid then
+            r[rPtr] = q[qPtr]
+            qPtr.__valid = false
+            break
+          end
+        end
+        RG.assert(not qPtr.__valid, 'Ran out of space on sub-partition')
+      end
+    end
+  end
+  setTaskName(pullAll, self:Name()..'_pullAll')
+  if DEBUG then prettyPrintTask(pullAll) end
+  return pullAll
+end)
+
+-- ProgramContext -> RG.rquote
+function R.Relation:emitPrimPartUpdate(ctxt)
+  local fld = assert(self:AutoPartitionField())
+  if self:isFlexible() then
+    local pushAll = self:emitPushAll()
+    local pullAll = self:emitPullAll()
+    return rquote
+      for c in [ctxt.primColors] do
+        pushAll(c, [ctxt.primPart[self]][c], [ctxt.qSrcPart[self]][c])
+      end
+      for c in [ctxt.primColors] do
+        pullAll(c, [ctxt.primPart[self]][c], [ctxt.qDstPart[self]][c])
+      end
+      -- TODO: Check that all out-queues have been emptied out.
+    end
+  else
+    local domRg = ctxt.relMap[self]
+    local domPart = ctxt.primPart[self]
+    local rngPart = ctxt.primPart[fld:Type().relation]
+    return rquote
+      domPart = preimage(domRg, rngPart, domRg.[fld:Name()])
+    end
+  end
+end
+
+-- ProgramContext -> RG.rquote
+function R.Relation:emitPrimPartCheck(ctxt)
+  assert(self:isFlexible())
+  local autoPartFld = assert(self:AutoPartitionField())
+  local domPart = ctxt.primPart[self]
+  local rngPart = ctxt.primPart[autoPartFld:Type().relation]
+  return rquote
+    for c in [ctxt.primColors] do
+      for x in [domPart][c] do
+        if x.__valid then
+          -- TODO: This membership check is inefficient; we should do the
+          -- original partitioning manually, so we know the exact limits of the
+          -- sub-partitions.
+          var found = false
+          for y in [rngPart][c] do
+            if x.[autoPartFld:Name()] == y then
+              found = true
+              break
+            end
+          end
+          RG.assert(found, 'Automatic partitioning invariant violated')
+        end
+      end
+    end
   end
 end
 
@@ -621,6 +916,8 @@ end
 --   domainRel      : R.Relation?
 --   field_use      : map(R.Field, P.PhaseType)
 --   global_use     : map(L.Global, P.PhaseType)
+--   inserts        : map(R.Relation, AST.InsertStatement)
+--   deletes        : map(R.Relation, AST.DeleteStatement)
 -- }
 
 local FunContext = {}
@@ -694,6 +991,31 @@ function FunContext.New(info, argNames, argTypes)
       end
     end
   end
+  -- Process inserts and deletes
+  for rel,_ in pairs(info.inserts or {}) do
+    assert(not self.relMap[rel])
+    local rg = RG.newsymbol(rel:regionType(), rel:Name())
+    self.accessedRels:insert(rel)
+    self.relMap[rel] = rg
+    for _,fld in ipairs(rel:Fields()) do
+      self.privileges:insert(RG.privilege(RG.reads, rg, fld:Name()))
+      self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
+    end
+    self.privileges:insert(RG.privilege(RG.reads, rg, '__valid'))
+    self.privileges:insert(RG.privilege(RG.writes, rg, '__valid'))
+  end
+  for rel,_ in pairs(info.deletes or {}) do
+    -- Phase checking has already marked all fields of the modified relation
+    -- as being written to.
+    local rg = assert(self.relMap[rel])
+    self.privileges:insert(RG.privilege(RG.reads, rg, '__valid'))
+    self.privileges:insert(RG.privilege(RG.writes, rg, '__valid'))
+  end
+  -- Privileges for accessing translator-added flags
+  if info.domainRel and info.domainRel:isFlexible() then
+    local rg = assert(self.relMap[info.domainRel])
+    self.privileges:insert(RG.privilege(RG.reads, rg, '__valid'))
+  end
   -- Process global access modes
   for g,pt in pairs(info.global_use) do
     if pt.read and not pt.reduceop then
@@ -764,6 +1086,9 @@ function AST.UserFunction:toTask(info)
   local block = self.body:toRQuote(ctxt)
   if info.domainRel then
     local loopVar = ctxt.args[1]
+    if info.domainRel:isFlexible() then
+      block = rquote if loopVar.__valid then [block] end end
+    end
     block = rquote for [loopVar] in [ctxt.domainSym] do [block] end end
   end
   body:insert(block)
@@ -778,7 +1103,21 @@ function AST.UserFunction:toTask(info)
   if info.domainRel then
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
-    if not ctxt.reducedGlobal and RG.check_cuda_available() then
+    if not RG.config['parallelize'] then
+      task tsk([ctxt:signature()]) where
+        dom <= univ, [ctxt.privileges]
+      do [body] end
+    elseif not isEmpty(info.inserts) then
+      -- HACK: Need to manually parallelize insertion kernels.
+      -- TODO: Only handling the simple case of functions without stencils,
+      -- which don't require any changes.
+      for fld,pt in pairs(info.field_use) do
+        assert(pt.centered)
+      end
+      task tsk([ctxt:signature()]) where
+        dom <= univ, [ctxt.privileges]
+      do [body] end
+    elseif not ctxt.reducedGlobal and RG.check_cuda_available() then
       __demand(__parallel, __cuda) task tsk([ctxt:signature()]) where
         dom <= univ, [ctxt.privileges]
       do [body] end
@@ -814,6 +1153,8 @@ function F.Function:toKernelTask()
   --   typed_ast      : AST.UserFunction
   --   field_use      : map(R.Field, P.PhaseType)
   --   global_use     : map(L.Global, P.PhaseType)
+  --   inserts        : map(R.Relation, AST.InsertStatement)
+  --   deletes        : map(R.Relation, AST.DeleteStatement)
   -- }
   info.name = self:Name()
   info.domainRel = argRel
@@ -837,6 +1178,8 @@ function F.Function:toHelperTask(argTypes)
   --   ...
   --   field_use      : map(R.Field, P.PhaseType)
   --   global_use     : map(L.Global, P.PhaseType)
+  --   inserts        : map(R.Relation, AST.InsertStatement)
+  --   deletes        : map(R.Relation, AST.DeleteStatement)
   -- }
   info.name = self:Name()
   info.domainRel = nil
@@ -914,7 +1257,8 @@ function AST.BinaryOp:toRExpr(ctxt)
     assert(false)
 end
 function AST.Bool:toRExpr(ctxt)
-  quit(self)
+  -- self.value : bool
+  return rexpr [self.value] end
 end
 function AST.Call:toRExpr(ctxt)
   -- self.func   : B.Builtin
@@ -1204,7 +1548,10 @@ function AST.DeclStatement:toRQuote(ctxt)
   end
 end
 function AST.DeleteStatement:toRQuote(ctxt)
-  quit(self)
+  -- self.key : AST.Expression
+  return rquote
+    [self.key:toRExpr(ctxt)].__valid = false
+  end
 end
 function AST.DoStatement:toRQuote(ctxt)
   -- self.body        : AST.Block
@@ -1262,7 +1609,30 @@ function AST.IfStatement:toRQuote(ctxt)
   return quot
 end
 function AST.InsertStatement:toRQuote(ctxt)
-  quit(self)
+  -- self.record   : AST.RecordLiteral
+  --   .names      : string*
+  --   .exprs      : AST.Expression
+  -- self.relation.node_type.value : R.Relation
+  local rg = ctxt.relMap[self.relation.node_type.value]
+  local elem = RG.newsymbol(nil, 'elem')
+  local fldWriteQuotes = newlist()
+  for i,name in ipairs(self.record.names) do
+    fldWriteQuotes:insert(rquote
+      elem.[name] = [self.record.exprs[i]:toRExpr(ctxt)]
+    end)
+  end
+  return rquote
+    var inserted = true
+    for [elem] in rg do
+      if not elem.__valid then
+        elem.__valid = true
+        [fldWriteQuotes]
+        inserted = true
+        break
+      end
+    end
+    RG.assert(inserted, 'Out of space')
+  end
 end
 function AST.NumericFor:toRQuote(ctxt)
   -- self.name  : AST.Symbol
@@ -1307,6 +1677,12 @@ if USE_HDF then
   -- string* -> RG.task
   -- TODO: Not caching the generated tasks.
   function R.Relation:emitDump(flds)
+    local flds = flds:copy()
+    if self:isFlexible() then
+      local autoPartFld = self:AutoPartitionField()
+      assert(not autoPartFld or flds:find(autoPartFld:Name()))
+      flds:insert('__valid')
+    end
     local dims = self:Dims()
     local nDims = #dims
     local isType = self:indexSpaceType()
@@ -1426,6 +1802,12 @@ if USE_HDF then
   -- string* -> RG.task
   -- TODO: Not caching the generated tasks.
   function R.Relation:emitLoad(flds)
+    local flds = flds:copy()
+    if self:isFlexible() then
+      local autoPartFld = self:AutoPartitionField()
+      assert(not autoPartFld or flds:find(autoPartFld:Name()))
+      flds:insert('__valid')
+    end
     local isType = self:indexSpaceType()
     local fs = self:fieldSpace()
     local load __demand(__inline) task load(r : region(isType, fs),
@@ -1452,20 +1834,6 @@ end -- if USE_HDF
 -------------------------------------------------------------------------------
 
 -- ProgramContext -> RG.rquote
-function R.Relation:emitPrimPartUpdate(ctxt)
-  local fld = assert(self:AutoPartitionField())
-  local baseRel = fld:Type().relation
-  local rg = ctxt.relMap[self]
-  local rgPart = ctxt.primPart[self]
-  local basePart = ctxt.primPart[baseRel]
-  -- TODO: Preimage requires the foreign-key field to be of ptr-type, and we
-  -- need metaprogramming support for fspaces to support that.
-  return rquote
-   -- rgPart = preimage(rg, basePart, rg.[fld:Name()])
-  end
-end
-
--- ProgramContext -> RG.rquote
 function M.AST.Stmt:toRQuote(ctxt)
   error('Abstract method')
 end
@@ -1476,15 +1844,24 @@ function M.AST.Block:toRQuote(ctxt)
 end
 function M.AST.ForEach:toRQuote(ctxt)
   -- Translate kernel to task
+  local info = self.fun:_get_typechecked(42, self.rel, {})
   local tsk, fCtxt = self.fun:toKernelTask()
   -- Collect arguments for call
   local actualArgs = newlist()
-  local domArg = self.subset
-    and ctxt.subsetMap[self.subset]
-    or ctxt.relMap[self.rel]
-  actualArgs:insert(domArg)
-  for _,rel in ipairs(fCtxt.accessedRels) do
-    actualArgs:insert(assert(ctxt.relMap[rel]))
+  local c = RG.newsymbol(nil, 'c')
+  if RG.config['parallelize'] and not isEmpty(info.inserts) then
+    -- HACK: Need to manually parallelize insertion kernels.
+    assert(not self.subset)
+    actualArgs:insert(rexpr [ctxt.primPart[self.rel]][c] end)
+    for _,rel in ipairs(fCtxt.accessedRels) do
+      actualArgs:insert(rexpr [ctxt.primPart[rel]][c] end)
+    end
+  else
+    actualArgs:insert(self.subset and ctxt.subsetMap[self.subset]
+                      or ctxt.relMap[self.rel])
+    for _,rel in ipairs(fCtxt.accessedRels) do
+      actualArgs:insert(ctxt.relMap[rel])
+    end
   end
   for _,g in ipairs(fCtxt.readGlobals) do
     actualArgs:insert(assert(ctxt.globalMap[g]))
@@ -1504,13 +1881,26 @@ function M.AST.ForEach:toRQuote(ctxt)
       (op == 'min') and rquote [retSym] min= [callExpr] end or
       assert(false)
   end
-  local quotes = newlist({callQuote})
-  local info = self.fun:_get_typechecked(42, self.rel, {})
-  local pt = info.field_use[self.rel:AutoPartitionField()]
-  if pt and pt.write then
-    quotes:insert(self.rel:emitPrimPartUpdate(ctxt))
+  if RG.config['parallelize'] and not isEmpty(info.inserts) then
+    -- HACK: Need to manually parallelize insertion kernels.
+    callQuote = rquote
+      for [c] in [ctxt.primColors] do
+        [callQuote]
+      end
+    end
   end
-  return rquote [quotes] end
+  -- Update primary partitioning (if appropriate)
+  local primPartQuote = rquote end
+  if RG.config['parallelize'] then
+    local pt = info.field_use[self.rel:AutoPartitionField()]
+    if pt and pt.write then
+      primPartQuote = self.rel:emitPrimPartUpdate(ctxt)
+    end
+  end
+  return rquote
+    [callQuote];
+    [primPartQuote]
+  end
 end
 function M.AST.If:toRQuote(ctxt)
   if self.elseBlock then
@@ -1532,14 +1922,17 @@ end
 function M.AST.FillField:toRQuote(ctxt)
   local rel = self.fld:Relation()
   local rg = ctxt.relMap[rel]
-  local fillQuote = rquote
-    fill(rg.[self.fld:Name()], [toRConst(self.val, self.fld:Type())])
+  local primPartQuote = rquote end
+  if RG.config['parallelize'] then
+    if self.fld == rel:AutoPartitionField() then
+      assert(not rel:isFlexible())
+      primPartQuote = rel:emitPrimPartUpdate(ctxt)
+    end
   end
-  local quotes = newlist({fillQuote})
-  if self.fld == rel:AutoPartitionField() then
-    quotes:insert(rel:emitPrimPartUpdate(ctxt))
+  return rquote
+    fill(rg.[self.fld:Name()], [toRConst(self.val, self.fld:Type())]);
+    [primPartQuote]
   end
-  return rquote [quotes] end
 end
 function M.AST.SetGlobal:toRQuote(ctxt)
   return rquote
@@ -1583,16 +1976,22 @@ function M.AST.Load:toRQuote(ctxt)
   local load = self.rel:emitLoad(self.flds)
   local relSym = ctxt.relMap[self.rel]
   local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
-  local primPartUpdQuote = rquote end
-  if self.flds:find(self.rel:AutoPartitionField()) then
-    primPartUpdQuote = self.rel:emitPrimPartUpdate(ctxt)
+  local primPartQuote = rquote end
+  if RG.config['parallelize'] then
+    if self.flds:find(self.rel:AutoPartitionField()) then
+      if self:isFlexible() then
+        primPartQuote = self.rel:emitPrimPartCheck(ctxt)
+      else
+        primPartQuote = self.rel:emitPrimPartUpdate(ctxt)
+      end
+    end
   end
   return rquote
     var filename = [rawstring](C.malloc(256))
     C.snprintf(filename, 256, [self.file], valRExprs)
     load(relSym, filename)
     C.free(filename)
-    [primPartUpdQuote]
+    [primPartQuote]
   end
 end
 
@@ -1659,10 +2058,14 @@ function A.translateAndRun(mapper_registration, link_flags)
   if DEBUG then print('import "regent"') end
   local stmts = newlist()
   local ctxt = { -- ProgramContext
-    globalMap  = {}, -- map(L.Global, RG.symbol)
-    relMap     = {}, -- map(R.Relation, RG.symbol)
-    subsetMap  = {}, -- map(R.Subset, RG.symbol)
-    primPart   = {}, -- map(R.Relation, RG.symbol)
+    globalMap  = {},  -- map(L.Global, RG.symbol)
+    relMap     = {},  -- map(R.Relation, RG.symbol)
+    subsetMap  = {},  -- map(R.Subset, RG.symbol)
+    primPart   = {},  -- map(R.Relation, RG.symbol)
+    queueMap   = {},  -- map(R.Relation, RG.symbol)
+    qSrcPart   = {},  -- map(R.Relation, RG.symbol)
+    qDstPart   = {},  -- map(R.Relation, RG.symbol)
+    primColors = nil, -- RG.symbol
   }
   -- Collect declarations
   local globalInits = {} -- map(L.Global, M.ExprConst)
@@ -1737,17 +2140,29 @@ function A.translateAndRun(mapper_registration, link_flags)
     end
   end
   -- Emit primary partitioning scheme
-  local primColors = RG.newsymbol(nil, 'primColors')
-  stmts:insert(rquote
-    var [primColors] = ispace(int3d, {PRIM_PART_NX,PRIM_PART_NY,PRIM_PART_NZ})
-  end)
-  for _,rel in ipairs(rels) do
-    local rg = ctxt.relMap[rel]
-    local p = RG.newsymbol(nil, rel:Name()..'_primPart')
-    ctxt.primPart[rel] = p
+  if RG.config['parallelize'] then
+    ctxt.primColors = RG.newsymbol(nil, 'primColors')
     stmts:insert(rquote
-      var [p] = partition(equal, rg, primColors)
+      var [ctxt.primColors] = ispace(int3d, {NX,NY,NZ})
     end)
+    for _,rel in ipairs(rels) do
+      local rg = ctxt.relMap[rel]
+      local p = RG.newsymbol(nil, rel:Name()..'_primPart')
+      ctxt.primPart[rel] = p
+      stmts:insert(rel:emitPrimPartInit(rg, p, ctxt.primColors))
+      -- Emit transfer queues for flexible relations with an auto-partitioning
+      -- constraint.
+      if rel:isFlexible() and rel:AutoPartitionField() then
+        local q = RG.newsymbol(nil, rel:Name()..'_queue')
+        ctxt.queueMap[rel] = q
+        local qpsrc = RG.newsymbol(nil, rel:Name()..'_qSrcPart')
+        ctxt.qSrcPart[rel] = qpsrc
+        local qpdst = RG.newsymbol(nil, rel:Name()..'_qDstPart')
+        ctxt.qDstPart[rel] = qpdst
+        stmts:insert(rel:emitQueueInit(q))
+        stmts:insert(rel:emitQueuePartInit(q, qpsrc, qpdst, ctxt.primColors))
+      end
+    end
   end
   -- Process statements
   for _,s in ipairs(M.stmts()) do

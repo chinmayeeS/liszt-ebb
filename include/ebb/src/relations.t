@@ -90,15 +90,24 @@ R.is_subset       = is_subset
 -- A Relation can be in at most one of the following MODES
 --    PLAIN
 --    GRID
+--    FLEXIBLE
 function Relation:isPlain()       return self._mode == 'PLAIN'      end
 function Relation:isGrid()        return self._mode == 'GRID'       end
+function Relation:isFlexible()    return self._mode == 'FLEXIBLE'   end
 
 -- Create a generic relation
 -- local myrel = L.NewRelation {
 --   name = 'myrel',
---   mode = 'PLAIN',
---  [size = 35,]        -- IF mode ~= 'GRID'
---  [dims = {45,90}, ]  -- IF mode == 'GRID'
+--   mode = 'PLAIN' | 'GRID' | 'FLEXIBLE',
+--   -- if mode == 'PLAIN':
+--   size = 35,
+--   -- if mode == 'GRID':
+--   dims = {45,90},
+--   -- if mode == 'FLEXIBLE':
+--   size = 100,
+--   max_skew = 3.0,
+--   max_xfer_rate = 0.3,
+--   xfer_stencil = {{0,0,1},{0,0,-1},...},
 -- }
 local relation_uid = 0
 function R.NewRelation(params)
@@ -113,22 +122,42 @@ function R.NewRelation(params)
   end
   local mode = params.mode or 'PLAIN'
   if not params.mode and params.dims then mode = 'GRID' end
-  if mode ~= 'PLAIN' and mode ~= 'GRID' then
+  if mode ~= 'PLAIN' and mode ~= 'GRID' and mode ~= 'FLEXIBLE' then
     error("NewRelation(): Bad 'mode' argument.  Was expecting\n"..
-          "  PLAIN or GRID", 2)
+          "  PLAIN, GRID or FLEXIBLE", 2)
   end
-  if mode == 'GRID' then
+  if mode == 'PLAIN' then
+    if type(params.size) ~= 'number' then
+      error("NewRelation() expects 'size' numeric argument", 2)
+    end
+  elseif mode == 'GRID' then
     if type(params.dims) ~= 'table' or
        (#params.dims ~= 2 and #params.dims ~= 3)
     then
       error("NewRelation(): Grids must specify 'dim' argument; "..
             "a table of 2 to 3 numbers specifying grid size", 2)
     end
-  else
+  elseif mode == 'FLEXIBLE' then
     if type(params.size) ~= 'number' then
       error("NewRelation() expects 'size' numeric argument", 2)
     end
-  end
+    if type(params.max_skew) ~= 'number' then
+      error("NewRelation() expects 'max_skew' numeric argument", 2)
+    end
+    if type(params.max_xfer_rate) ~= 'number' then
+      error("NewRelation() expects 'max_xfer_rate' numeric argument", 2)
+    end
+    if not terralib.israwlist(params.xfer_stencil) then
+      error("NewRelation(): 'xfer_stencil' argument must be a list", 2)
+    end
+    for _,dir in ipairs(params.xfer_stencil) do
+      if (not terralib.israwlist(dir) or #dir ~= 3 or type(dir[1]) ~= 'number'
+          or type(dir[2]) ~= 'number' or type(dir[3]) ~= 'number') then
+        error("NewRelation(): Each element of 'xfer_stencil' argument must "..
+              "be a list of 3 integers", 2)
+      end
+    end
+  else assert(false) end
 
   -- CONSTRUCT and return the relation
   local rel = setmetatable( {
@@ -148,16 +177,24 @@ function R.NewRelation(params)
   relation_uid = relation_uid + 1 -- increment unique id counter
 
   -- store mode dependent values
-  local size = params.size
-  if mode == 'GRID' then
+  local size
+  if mode == 'PLAIN' then
+    size = params.size
+  elseif mode == 'GRID' then
     size = 1
     rawset(rel, '_dims', {})
     for i,n in ipairs(params.dims) do
       rel._dims[i]    = n
       size            = size * n
     end
+  elseif mode == 'FLEXIBLE' then
+    size = params.size
+    rawset(rel, '_max_skew', params.max_skew)
+    rawset(rel, '_max_xfer_rate', params.max_xfer_rate)
+    rawset(rel, '_xfer_stencil', terralib.newlist(params.xfer_stencil))
   end
   rawset(rel, '_logical_size',  size)
+
   M.decls():insert(M.AST.NewRelation(rel))
   return rel
 end
@@ -196,6 +233,15 @@ function Relation:Periodic()
   local wraps = {}
   for i,p in ipairs(self._dims) do wraps[i] = p end
   return wraps
+end
+function Relation:MaxSkew()
+  return self._max_skew
+end
+function Relation:MaxXferRate()
+  return self._max_xfer_rate
+end
+function Relation:XferStencil()
+  return self._xfer_stencil
 end
 
 function Relation:foreach(user_func, ...)
@@ -453,6 +499,9 @@ function Relation:NewField(name, typ)
     error("Cannot create a new field with name '"..name.."'  "..
           "That name is already being used.", 2)
   end
+  if string.sub(name, 1, 2) == '__' then
+    error("Field names starting with '__' are reserved by the system.", 2)
+  end
 
   if is_relation(typ) then
     typ = keyT(typ)
@@ -460,6 +509,9 @@ function Relation:NewField(name, typ)
   if not T.istype(typ) or not typ:isfieldvalue() then
     error("NewField() expects an Ebb type or "..
           "relation as the 2nd argument", 2)
+  end
+  if typ:iskey() and typ.relation:isFlexible() then
+    error("Foreign keys to flexible relations are not allowed", 2)
   end
 
   -- create the field
