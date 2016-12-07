@@ -151,6 +151,39 @@ end
 
 -------------------------------------------------------------------------------
 
+local record_types = {}
+local function recordType (rec)
+  if type(rec) ~= 'table' then
+    error('invalid argument to record type constructor:\n'..
+          '  must supply a table', 2)
+  end
+  -- string for de-duplicating types
+  local unique_str = '{'
+  -- build the string and check the types
+  for name, typ in pairs_sorted(rec) do
+    if type(name) ~= 'string' then
+      error('invalid argument to record type constructor:\n'..
+            '  table keys must be strings', 2)
+    end
+    if not T.istype(typ) or
+       not (typ:isvalue() or typ:iskey())
+    then
+      error('invalid argument to record type constructor:\n'..
+            '  table values must be valid types for fields, not '..
+            tostring(typ), 2)
+    end
+    unique_str = unique_str .. tostring(name) .. '=' .. tostring(typ) .. ','
+  end
+  unique_str = unique_str .. '}'
+
+  if not record_types[unique_str] then
+    local rt = NewType("record")
+    rt.rec = rec
+    record_types[unique_str] = rt
+  end
+  return record_types[unique_str]
+end
+
 local internal_cache = {}
 local function internalType(obj)
   if internal_cache[obj] then return internal_cache[obj] end
@@ -190,6 +223,7 @@ end
 T.vector        = vectorType
 T.matrix        = matrixType
 T.key           = keyType
+T.record        = recordType
 T.internal      = internalType
 T.error         = NewType("error")
 
@@ -218,6 +252,9 @@ function Type:isinternal()
 end
 function Type:iserror()
   return self.kind == "error"
+end
+function Type:isrecord()
+  return self.kind == "record"
 end
 
 -- These types represent Ebb values (not keys though)
@@ -299,6 +336,16 @@ function Type:__tostring()
                                           tostring(self.Nrow)..','..
                                           tostring(self.Ncol)..')'
   elseif self:isscalarkey()   then return 'Key('..self.relation:Name()..')'
+  elseif self:isrecord()      then
+    local str = 'Record({ '
+    local first_pair = true
+    for name, typ in pairs_sorted(self.rec) do
+      if first_pair then first_pair = false
+      else str = str .. ', ' end
+      str = str .. name .. '=' .. tostring(typ)
+    end
+    str = str .. ' })'
+    return str
   elseif self:isinternal()  then return 'Internal('..tostring(self.value)..')'
   elseif self:iserror()     then return 'error'
   end
