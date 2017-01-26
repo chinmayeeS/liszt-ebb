@@ -1966,40 +1966,7 @@ function M.AST.If:toRQuote(ctxt)
   end
 end
 function M.AST.FillField:toRQuote(ctxt)
-  local rel = self.fld:Relation()
-  local primPartQuote = rquote end
-  if RG.config['parallelize'] then
-    if self.fld == rel:AutoPartitionField() then
-      assert(not rel:isFlexible())
-      primPartQuote = rel:emitPrimPartUpdate(ctxt)
-    end
-  end
-  local fillTask
-  local arg = RG.newsymbol(rel:regionType(), rel:Name())
-  local privileges = newlist()
-  privileges:insert(RG.privilege(RG.reads, arg))
-  privileges:insert(RG.privilege(RG.writes, arg))
-  if RG.check_cuda_available() then
-    __demand(__parallel, __cuda)
-    task fillTask([arg]) where [privileges] do
-      for e in arg do
-        e.[self.fld:Name()] = [toRConst(self.val, self.fld:Type())]
-      end
-    end
-  else
-    __demand(__parallel)
-    task fillTask([arg]) where [privileges] do
-      for e in arg do
-        e.[self.fld:Name()] = [toRConst(self.val, self.fld:Type())]
-      end
-    end
-  end
-  setTaskName(fillTask, rel:Name()..'_'..self.fld:Name()..'_fillTask')
-  if DEBUG then prettyPrintTask(fillTask) end
-  return rquote
-    fillTask([ctxt.relMap[rel]]);
-    [primPartQuote]
-  end
+  error('Fill operations are handled separately')
 end
 function M.AST.SetGlobal:toRQuote(ctxt)
   return rquote
@@ -2120,6 +2087,62 @@ function M.AST.UnaryOp:toRExpr(ctxt)
     assert(false)
 end
 
+-- ProgramContext, M.AST.FillField -> RG.rquote*
+local function emitFillTaskCalls(ctxt, fillStmts)
+  local fillsPerRelation = {} -- map(R.Relation,M.AST.FillField)
+  local mustUpdatePrimPart = {} -- set(R.Relation)
+  for _,fill in ipairs(fillStmts) do
+    local rel = fill.fld:Relation()
+    local stmts = fillsPerRelation[rel] or newlist()
+    stmts:insert(fill)
+    fillsPerRelation[rel] = stmts
+    if RG.config['parallelize'] then
+      if fill.fld == rel:AutoPartitionField() then
+        assert(not rel:isFlexible())
+        mustUpdatePrimPart[rel] = true
+      end
+    end
+  end
+  local fillTasks = {} -- map(R.Relation,RG.task)
+  for rel,fills in pairs(fillsPerRelation) do
+    local arg = RG.newsymbol(rel:regionType(), rel:Name())
+    local privileges = newlist()
+    privileges:insert(RG.privilege(RG.reads, arg))
+    privileges:insert(RG.privilege(RG.writes, arg))
+    local tsk
+    if RG.check_cuda_available() then
+      __demand(__parallel, __cuda)
+      task tsk([arg]) where [privileges] do
+        [fills:map(function(fill) return rquote
+           for e in arg do
+             e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
+           end
+         end end)]
+      end
+    else
+      __demand(__parallel)
+      task tsk([arg]) where [privileges] do
+        [fills:map(function(fill) return rquote
+           for e in arg do
+             e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
+           end
+         end end)]
+      end
+    end
+    fillTasks[rel] = tsk
+    setTaskName(tsk, rel:Name()..'_fillTask')
+    if DEBUG then prettyPrintTask(tsk) end
+  end
+  local calls = newlist() -- RG.rquote*
+  for rel,tsk in pairs(fillTasks) do
+    calls:insert(rquote [tsk]([ctxt.relMap[rel]]) end)
+    if mustUpdatePrimPart[rel] then
+      calls:insert(rel:emitPrimPartUpdate(ctxt))
+    end
+  end
+  return calls
+end
+
 -- (()->())?, (string*)? -> ()
 function A.translateAndRun(mapper_registration, link_flags)
   if DEBUG then print('import "regent"') end
@@ -2231,9 +2254,19 @@ function A.translateAndRun(mapper_registration, link_flags)
       end
     end
   end
-  -- Process statements
+  -- Process fill statements
+  local fillStmts = newlist()
   for _,s in ipairs(M.stmts()) do
-    stmts:insert(s:toRQuote(ctxt))
+    if M.AST.FillField.check(s) then
+      fillStmts:insert(s)
+    end
+  end
+  stmts:insertall(emitFillTaskCalls(ctxt, fillStmts))
+  -- Process other statements
+  for _,s in ipairs(M.stmts()) do
+    if not M.AST.FillField.check(s) then
+      stmts:insert(s:toRQuote(ctxt))
+    end
   end
   -- Synthesize main task
   local task main()
