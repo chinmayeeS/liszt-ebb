@@ -1088,7 +1088,8 @@ function AST.UserFunction:toTask(info)
   if info.domainRel then
     local loopVar = ctxt.args[1]
     if info.domainRel:isFlexible() then
-      block = rquote if loopVar.__valid then [block] end end
+      local rel = ctxt.relMap[info.domainRel]
+      block = rquote if [rel][loopVar].__valid then [block] end end
     end
     block = rquote for [loopVar] in [ctxt.domainSym] do [block] end end
   end
@@ -1593,8 +1594,9 @@ function AST.DeclStatement:toRQuote(ctxt)
 end
 function AST.DeleteStatement:toRQuote(ctxt)
   -- self.key : AST.Expression
+  local rel = ctxt.relMap[ctxt.domainRel]
   return rquote
-    [self.key:toRExpr(ctxt)].__valid = false
+    [rel][ [self.key:toRExpr(ctxt)] ].__valid = false
   end
 end
 function AST.DoStatement:toRQuote(ctxt)
