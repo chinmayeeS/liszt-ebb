@@ -29,13 +29,13 @@ package.loaded["ebb.domains.grid"] = Grid
 -------------------------------------------------------------------------------
 
 local int_floor = L.Macro(function(v)
-  return ebb ` L.int(L.floor(v))
+  return ebb `L.int(L.floor(v))
 end)
 local max_impl = L.Macro(function(a,b)
-  return ebb ` L.imax(a, b)
+  return ebb `L.imax(a, b)
 end)
 local min_impl = L.Macro(function(a,b)
-  return ebb ` L.imin(a, b)
+  return ebb `L.imin(a, b)
 end)
 
 local clamp_impl = L.Macro(function(x, lower, upper)
@@ -44,15 +44,12 @@ end)
 
 -- convert a potentially continuous signed value x to
 -- an address modulo the given uint m
-local ebb float_to_uint64_mod (x, m)
-  return L.uint64(L.fmod(x,m) + m) % m
-end
-
--- the way we actually use these...
-local wrap_idx  = float_to_uint64_mod
-local ebb clamp_idx (x, limit)
-  return L.uint64(clamp_impl(x, 0.0, L.double(limit-1)))
-end
+local wrap_idx = L.Macro(function(x, m)
+  return ebb `L.uint64(L.fmod(x,m) + m) % m
+end)
+local clamp_idx = L.Macro(function(x, limit)
+  return ebb `L.uint64(clamp_impl(x, 0.0, L.double(limit-1)))
+end)
 
 local function copy_table(tbl)
   local cpy = {}
@@ -127,19 +124,16 @@ local function setup2dCells(grid)
   -- Boundary/Interior subsets
   cells:NewDivision(rectangles_2d(Cx, Cy, xn_bd, yn_bd))
 
-  cells:NewFieldReadFunction('center', ebb (c)
+  cells:NewFieldReadFunction('center', ebb(c)
     return L.vec2d({ xo + xw * (L.double(L.xid(c)) + 0.5),
                      yo + yw * (L.double(L.yid(c)) + 0.5) })  end)
 
   local xsnap = grid:xUsePeriodic() and wrap_idx or clamp_idx
   local ysnap = grid:yUsePeriodic() and wrap_idx or clamp_idx
-  rawset(cells, 'locate', ebb(pos)
-    var xval  = (pos[0] - xo)/xw
-    var yval  = (pos[1] - yo)/yw
-    var xidx  = xsnap(xval, Cx)
-    var yidx  = ysnap(yval, Cy)
-    return L.UNSAFE_ROW({xidx, yidx}, cells)
-  end)
+  rawset(cells, 'locate', L.Macro(function(pos)
+    return ebb `L.UNSAFE_ROW({xsnap((pos[0] - xo)/xw, Cx),
+                              ysnap((pos[1] - yo)/yw, Cy)}, cells)
+  end))
 
   -- boundary depths
   cells:NewFieldMacro('xneg_depth', L.Macro(function(c)
@@ -181,13 +175,10 @@ local function setup2dDualCells(grid)
 
   local xsnap = grid:xUsePeriodic() and wrap_idx or clamp_idx
   local ysnap = grid:yUsePeriodic() and wrap_idx or clamp_idx
-  rawset(dcells, 'dual_locate', ebb(xy)
-    var xval  = (xy[0] - xo)/xw + 0.5
-    var yval  = (xy[1] - yo)/yw + 0.5
-    var xidx  = xsnap(xval, Vx)
-    var yidx  = ysnap(yval, Vy)
-    return L.UNSAFE_ROW({xidx, yidx}, dcells)
-  end)
+  rawset(dcells, 'dual_locate', L.Macro(function(xy)
+    return ebb `L.UNSAFE_ROW({xsnap((xy[0] - xo)/xw + 0.5, Vx),
+                              ysnap((xy[1] - yo)/yw + 0.5, Vy)}, dcells)
+  end))
 end
 
 -------------------------------------------------------------------------------
@@ -511,15 +502,11 @@ local function setup3dCells(grid)
   local xsnap = grid:xUsePeriodic() and wrap_idx or clamp_idx
   local ysnap = grid:yUsePeriodic() and wrap_idx or clamp_idx
   local zsnap = grid:zUsePeriodic() and wrap_idx or clamp_idx
-  rawset(cells, 'locate', ebb(pos)
-    var xval = (pos[0] - xo) / xw
-    var yval = (pos[1] - yo) / yw
-    var zval = (pos[2] - zo) / zw
-    var xidx = xsnap(xval, Cx)
-    var yidx = ysnap(yval, Cy)
-    var zidx = zsnap(zval, Cz)
-    return L.UNSAFE_ROW({xidx, yidx, zidx}, cells)
-  end)
+  rawset(cells, 'locate', L.Macro(function(pos)
+    return ebb `L.UNSAFE_ROW({xsnap((pos[0] - xo) / xw, Cx),
+                              ysnap((pos[1] - yo) / yw, Cy),
+                              zsnap((pos[2] - zo) / zw, Cz)}, cells)
+  end))
 
   -- boundary depths
   cells:NewFieldMacro('xneg_depth', L.Macro(function(c)
@@ -574,15 +561,11 @@ local function setup3dDualCells(grid)
   local xsnap = grid:xUsePeriodic() and wrap_idx or clamp_idx
   local ysnap = grid:yUsePeriodic() and wrap_idx or clamp_idx
   local zsnap = grid:zUsePeriodic() and wrap_idx or clamp_idx
-  rawset(dcells, 'dual_locate', ebb(xyz)
-    var xval = (xyz[0] - xo) / xw + 0.5
-    var yval = (xyz[1] - yo) / yw + 0.5
-    var zval = (xyz[2] - zo) / zw + 0.5
-    var xidx = xsnap(xval, Vx)
-    var yidx = ysnap(yval, Vy)
-    var zidx = zsnap(zval, Vz)
-    return L.UNSAFE_ROW({xidx, yidx, zidx}, dcells)
-  end)
+  rawset(dcells, 'dual_locate', L.Macro(function(xyz)
+    return ebb `L.UNSAFE_ROW({xsnap((xyz[0] - xo) / xw + 0.5, Vx),
+                              ysnap((xyz[1] - yo) / yw + 0.5, Vy),
+                              zsnap((xyz[2] - zo) / zw + 0.5, Vz)}, dcells)
+  end))
 end
 
 -------------------------------------------------------------------------------
