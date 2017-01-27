@@ -674,19 +674,21 @@ end
 
 -- () -> RG.task
 R.Relation.emitElemColor = terralib.memoize(function(self)
-  assert(self:isFlexible() and self:AutoPartitionField())
-  local primPartSize = self:primPartSize()
-  local regionType = self:regionType()
-  local fieldSpace = self:fieldSpace()
-  local elemColor __demand(__inline) task elemColor
-    (r : regionType, rPtr : ptr(fieldSpace, r))
-    for rStart in r do
-      var partNum = (__raw(rPtr).value - __raw(rStart).value) / primPartSize
-      var z = partNum % NZ
-      var y = (partNum / NZ) % NY
-      var x = partNum / (NZ * NY)
-      return int3d{x,y,z}
+  local dims = self:Dims()
+  local elemColor
+  if self:isGrid() and #dims == 3 then
+    -- HACK: Reverse engineering the compiler's partioning scheme.
+    __demand(__inline) task elemColor(idx : int3d)
+      var blockSizeX = ([dims[1]] + NX - 1) / NX
+      var blockSizeY = ([dims[2]] + NY - 1) / NY
+      var blockSizeZ = ([dims[3]] + NZ - 1) / NZ
+      return int3d{idx.x / blockSizeX, idx.y / blockSizeY, idx.z / blockSizeZ}
     end
+  else
+    -- TODO: Not covered: Non-3D grids, plain and flexible relations. The last
+    -- two follow a different partitioning scheme, and may also require the
+    -- base region to calculate offsets.
+    assert(false)
   end
   setTaskName(elemColor, self:Name()..'_elemColor')
   if DEBUG then prettyPrintTask(elemColor) end
