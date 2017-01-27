@@ -2149,7 +2149,8 @@ end
 -- (()->())?, (string*)? -> ()
 function A.translateAndRun(mapper_registration, link_flags)
   if DEBUG then print('import "regent"') end
-  local stmts = newlist()
+  local header = newlist() -- RG.rquote*
+  local body = newlist() -- RG.rquote*
   local ctxt = { -- ProgramContext
     globalMap  = {},  -- map(L.Global, RG.symbol)
     relMap     = {},  -- map(R.Relation, RG.symbol)
@@ -2180,17 +2181,17 @@ function A.translateAndRun(mapper_registration, link_flags)
   for g,val in pairs(globalInits) do
     local x = RG.newsymbol(toRType(g:Type()), idSanitize(g:Name()))
     ctxt.globalMap[g] = x
-    stmts:insert(rquote var [x] = [toRConst(val, g:Type())] end)
+    header:insert(rquote var [x] = [toRConst(val, g:Type())] end)
   end
   -- Emit region declarations and user-defined divisions
   for _,rel in ipairs(rels) do
     local rg = RG.newsymbol(nil, rel:Name())
     ctxt.relMap[rel] = rg
-    stmts:insert(rel:emitRegionInit(rg))
+    header:insert(rel:emitRegionInit(rg))
     for _,div in ipairs(rel:Divisions()) do
       local colors = RG.newsymbol(nil, 'colors')
       local coloring = RG.newsymbol(nil, 'coloring')
-      stmts:insert(rquote
+      header:insert(rquote
         var [colors] = ispace(int1d, [#div])
         var [coloring] = RG.c.legion_domain_point_coloring_create()
       end)
@@ -2211,23 +2212,23 @@ function A.translateAndRun(mapper_registration, link_flags)
               hi = int3d{ x = [rect[1][2]], y = [rect[2][2]], z = [rect[3][2]] }}
           end or
           assert(false)
-        stmts:insert(rquote
+        header:insert(rquote
           RG.c.legion_domain_point_coloring_color_domain
             (coloring, int1d(i-1), rectExpr)
         end)
       end
       local p = RG.newsymbol(nil, 'p')
-      stmts:insert(rquote
+      header:insert(rquote
         var [p] = partition(disjoint, rg, coloring, colors)
       end)
       for i,subset in ipairs(div) do
         local subrg = RG.newsymbol(nil, idSanitize(subset:FullName()))
         ctxt.subsetMap[subset] = subrg
-        stmts:insert(rquote
+        header:insert(rquote
           var [subrg] = p[i-1]
         end)
       end
-      stmts:insert(rquote
+      header:insert(rquote
         RG.c.legion_domain_point_coloring_destroy(coloring)
       end)
     end
@@ -2235,14 +2236,14 @@ function A.translateAndRun(mapper_registration, link_flags)
   -- Emit primary partitioning scheme
   if RG.config['parallelize'] then
     ctxt.primColors = RG.newsymbol(nil, 'primColors')
-    stmts:insert(rquote
+    header:insert(rquote
       var [ctxt.primColors] = ispace(int3d, {NX,NY,NZ})
     end)
     for _,rel in ipairs(rels) do
       local rg = ctxt.relMap[rel]
       local p = RG.newsymbol(nil, rel:Name()..'_primPart')
       ctxt.primPart[rel] = p
-      stmts:insert(rel:emitPrimPartInit(rg, p, ctxt.primColors))
+      header:insert(rel:emitPrimPartInit(rg, p, ctxt.primColors))
       -- Emit transfer queues for flexible relations with an auto-partitioning
       -- constraint.
       if rel:isFlexible() and rel:AutoPartitionField() then
@@ -2252,8 +2253,8 @@ function A.translateAndRun(mapper_registration, link_flags)
         ctxt.qSrcPart[rel] = qpsrc
         local qpdst = RG.newsymbol(nil, rel:Name()..'_qDstPart')
         ctxt.qDstPart[rel] = qpdst
-        stmts:insert(rel:emitQueueInit(q))
-        stmts:insert(rel:emitQueuePartInit(q, qpsrc, qpdst, ctxt.primColors))
+        header:insert(rel:emitQueueInit(q))
+        header:insert(rel:emitQueuePartInit(q, qpsrc, qpdst, ctxt.primColors))
       end
     end
   end
@@ -2264,16 +2265,40 @@ function A.translateAndRun(mapper_registration, link_flags)
       fillStmts:insert(s)
     end
   end
-  stmts:insertall(emitFillTaskCalls(ctxt, fillStmts))
+  body:insertall(emitFillTaskCalls(ctxt, fillStmts))
   -- Process other statements
   for _,s in ipairs(M.stmts()) do
     if not M.AST.FillField.check(s) then
-      stmts:insert(s:toRQuote(ctxt))
+      body:insert(s:toRQuote(ctxt))
     end
   end
   -- Synthesize main task
-  local task main()
-    [stmts]
+  local main
+  if RG.config['parallelize'] then
+    local opts = newlist() -- RG.rexpr*
+    opts:insertall(rels:map(function(rel) return ctxt.primPart[rel] end))
+    for _,domRel in ipairs(rels) do
+      local autoPartFld = domRel:AutoPartitionField()
+      if domRel:isFlexible() and autoPartFld then
+        local rngRel = autoPartFld:Type().relation
+        local domRg = ctxt.relMap[domRel]
+        local domPart = ctxt.primPart[domRel]
+        local rngRg = ctxt.relMap[rngRel]
+        local rngPart = ctxt.primPart[rngRel]
+        opts:insert(rexpr
+          image(rngRg, domPart, domRg.[autoPartFld:Name()]) <= rngPart
+        end)
+      end
+    end
+    task main()
+      [header]
+      __parallelize_with [opts] do [body] end
+    end
+  else
+    task main()
+      [header]
+      [body]
+    end
   end
   setTaskName(main, 'main')
   if DEBUG then
