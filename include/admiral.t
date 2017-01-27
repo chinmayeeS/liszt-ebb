@@ -475,6 +475,7 @@ end
 
 -- string, T.Type, RG.rexpr, RG.rexpr -> RG.rquote
 local function emitReduce(op, typ, lval, exp)
+  assert(op ~= '/' or typ == L.float or typ == L.double)
   if typ:isvector() then
     local tmp = RG.newsymbol(toRType(typ), 'tmp')
     local v = RG.newsymbol(toRType(typ), 'v')
@@ -483,24 +484,24 @@ local function emitReduce(op, typ, lval, exp)
     stmts:insert(rquote var [v] = lval end)
     for i=0,typ.N-1 do
       stmts:insert(
-        (op == '+')   and rquote v[ [i] ] +=   tmp[ [i] ] end or
-        (op == '-')   and rquote v[ [i] ] -=   tmp[ [i] ] end or
-        (op == '*')   and rquote v[ [i] ] *=   tmp[ [i] ] end or
-        (op == '/')   and rquote v[ [i] ] /=   tmp[ [i] ] end or
-        (op == 'max') and rquote v[ [i] ] max= tmp[ [i] ] end or
-        (op == 'min') and rquote v[ [i] ] min= tmp[ [i] ] end or
+        (op == '+')   and rquote v[ [i] ] +=   tmp[ [i] ]     end or
+        (op == '-')   and rquote v[ [i] ] +=   -tmp[ [i] ]    end or
+        (op == '*')   and rquote v[ [i] ] *=   tmp[ [i] ]     end or
+        (op == '/')   and rquote v[ [i] ] *=   1.0/tmp[ [i] ] end or
+        (op == 'max') and rquote v[ [i] ] max= tmp[ [i] ]     end or
+        (op == 'min') and rquote v[ [i] ] min= tmp[ [i] ]     end or
         assert(false))
     end
     stmts:insert(rquote lval = v end)
     return rquote [stmts] end
   end
   return
-    (op == '+')   and rquote lval +=   exp end or
-    (op == '-')   and rquote lval -=   exp end or
-    (op == '*')   and rquote lval *=   exp end or
-    (op == '/')   and rquote lval /=   exp end or
-    (op == 'max') and rquote lval max= exp end or
-    (op == 'min') and rquote lval min= exp end or
+    (op == '+')   and rquote lval +=   exp     end or
+    (op == '-')   and rquote lval +=   -exp    end or
+    (op == '*')   and rquote lval *=   exp     end or
+    (op == '/')   and rquote lval *=   1.0/exp end or
+    (op == 'max') and rquote lval max= exp     end or
+    (op == 'min') and rquote lval min= exp     end or
     assert(false)
 end
 
@@ -1921,12 +1922,12 @@ function M.AST.ForEach:toRQuote(ctxt)
     local retSym = ctxt.globalMap[fCtxt.reducedGlobal]
     local op = fCtxt.globalReduceOp
     callQuote =
-      (op == '+')   and rquote [retSym] +=   [callExpr] end or
-      (op == '-')   and rquote [retSym] -=   [callExpr] end or
-      (op == '*')   and rquote [retSym] *=   [callExpr] end or
-      (op == '/')   and rquote [retSym] /=   [callExpr] end or
-      (op == 'max') and rquote [retSym] max= [callExpr] end or
-      (op == 'min') and rquote [retSym] min= [callExpr] end or
+      (op == '+')   and rquote [retSym] +=   [callExpr]     end or
+      (op == '-')   and rquote [retSym] +=   -[callExpr]    end or
+      (op == '*')   and rquote [retSym] *=   [callExpr]     end or
+      (op == '/')   and rquote [retSym] *=   1.0/[callExpr] end or
+      (op == 'max') and rquote [retSym] max= [callExpr]     end or
+      (op == 'min') and rquote [retSym] min= [callExpr]     end or
       assert(false)
   end
   if RG.config['parallelize'] and not isEmpty(info.inserts) then
