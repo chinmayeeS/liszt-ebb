@@ -768,12 +768,11 @@ end
 R.Relation.emitPush = terralib.memoize(function(self)
   assert(self:isFlexible() and self:AutoPartitionField())
   local perDirQueueSize = self:perDirQueueSize()
-  local regionType = self:regionType()
   local fieldSpace = self:fieldSpace()
   local push __demand(__inline) task push
-    (r        : regionType,
+    (r        : self:regionType(),
      rPtr     : ptr(fieldSpace, r),
-     q        : regionType,
+     q        : self:regionType(),
      qPartIdx : int)
   where
     reads(r), writes(r.__valid), reads writes(q), r * q
@@ -803,14 +802,15 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   assert(self:isFlexible() and autoPartFld)
   local qPartColorOff = self:emitQPartColorOff()
   local rngElemColor = autoPartFld:Type().relation:emitElemColor()
-  local regionType = self:regionType()
-  local task pushAll(color : int3d, r : regionType, q : regionType)
+  local push = self:emitPush()
+  local task pushAll
+    (color : int3d, r : self:regionType(), q : self:regionType())
   where
     reads(r), writes(r.__valid), reads writes(q), r * q
   do
     for rPtr in r do
       if rPtr.__valid then
-        var rColor = rngElemColor(rPtr.[autoPartFld])
+        var rColor = rngElemColor(rPtr.[autoPartFld:Name()])
         if rColor ~= color then
           for qPartIdx = 0, [#self:XferStencil()] do
             if rColor ==
@@ -832,8 +832,8 @@ end)
 -- () -> RG.task
 R.Relation.emitPullAll = terralib.memoize(function(self)
   assert(self:isFlexible() and self:AutoPartitionField())
-  local regionType = self:regionType()
-  local task pullAll(color : int3d, r : regionType, q : regionType)
+  local task pullAll
+    (color : int3d, r : self:regionType(), q : self:regionType())
   where
     reads writes(r), reads(q), writes(q.__valid), r * q
   do
