@@ -2296,7 +2296,7 @@ function A.translateAndRun(mapper_registration, link_flags)
     end
   else
     task main()
-      [header]
+      [header];
       [body]
     end
   end
