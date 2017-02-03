@@ -176,7 +176,7 @@ local function opIdentity(op, T)
     (op == '*')   and 1 or
     (op == '/')   and 1 or
     (op == 'max') and minValue(T) or
-    (op == 'min') and minValue(T) or
+    (op == 'min') and maxValue(T) or
     assert(false)
 end
 
@@ -1428,6 +1428,8 @@ function AST.Call:toRExpr(ctxt)
       if not ty:isvector() then
         if ty == L.uint64 then
           fmt = fmt .. "%lu "
+        elseif ty == L.int then
+          fmt = fmt .. "%d "
         else
           fmt = fmt .. "%f "
         end
@@ -1435,6 +1437,8 @@ function AST.Call:toRExpr(ctxt)
         local val_fmt
         if ty.type == L.uint64 then
           val_fmt = "%lu"
+        elseif ty == L.int then
+          fmt = fmt .. "%d"
         else
           val_fmt = "%f"
         end
@@ -1671,7 +1675,7 @@ function AST.InsertStatement:toRQuote(ctxt)
     end)
   end
   return rquote
-    var inserted = true
+    var inserted = false
     for [elem] in rg do
       if not elem.__valid then
         elem.__valid = true
