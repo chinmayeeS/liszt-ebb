@@ -315,6 +315,15 @@ local function isEmpty(tab)
   return true
 end
 
+-- map(K,V) -> K*
+local function keys(map)
+  local res = newlist()
+  for k,v in pairs(map) do
+    res:insert(k)
+  end
+  return res
+end
+
 -------------------------------------------------------------------------------
 -- Vector type support
 -------------------------------------------------------------------------------
@@ -969,7 +978,10 @@ function FunContext.New(info, argNames, argTypes)
     self.localMap[lsym] = rsym
   end
   -- Process field access modes
-  for fld,pt in pairs(info.field_use) do
+  local fields = keys(info.field_use)
+  fields:sort(function(f1,f2) return f1:FullName() < f2:FullName() end)
+  for _,fld in ipairs(fields) do
+    local pt = info.field_use[fld]
     local rel = fld:Relation()
     local rg = self.relMap[rel]
     if not rg then
@@ -986,7 +998,7 @@ function FunContext.New(info, argNames, argTypes)
     end
     if pt.reduceop then
       if pt.centered then
-        -- More liberal priviledges, but avoids copying.
+        -- More liberal privileges, but avoids copying.
         self.privileges:insert(RG.privilege(RG.reads, rg, fld:Name()))
         self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
       else
@@ -1021,7 +1033,10 @@ function FunContext.New(info, argNames, argTypes)
     self.privileges:insert(RG.privilege(RG.reads, rg, '__valid'))
   end
   -- Process global access modes
-  for g,pt in pairs(info.global_use) do
+  local globals = keys(info.global_use)
+  globals:sort(function(g1,g2) return g1:Name() < g2:Name() end)
+  for _,g in ipairs(globals) do
+    local pt = info.global_use[g]
     if pt.read and not pt.reduceop then
       assert(not self.globalMap[g])
       self.globalMap[g] = RG.newsymbol(toRType(g:Type()), idSanitize(g:Name()))
