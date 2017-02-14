@@ -1973,16 +1973,23 @@ end
 function M.AST.If:toRQuote(ctxt)
   if self.elseBlock then
     return rquote
-      if [self.cond:toRExpr(ctxt)] then
+      var thenFlag = [int]([self.cond:toRExpr(ctxt)])
+      var elseFlag = 1 - thenFlag
+      while thenFlag > 0 do
         [self.thenBlock:toRQuote(ctxt)]
-      else
+        thenFlag -= 1
+      end
+      while elseFlag > 0 do
         [self.elseBlock:toRQuote(ctxt)]
+        elseFlag -= 1
       end
     end
   else
     return rquote
-      if [self.cond:toRExpr(ctxt)] then
+      var flag = [int]([self.cond:toRExpr(ctxt)])
+      while flag > 0 do
         [self.thenBlock:toRQuote(ctxt)]
+        flag -= 1
       end
     end
   end
