@@ -430,9 +430,11 @@ local BINARY_ARITH_FUNS = {
   [L.fmod]  = RG.fmod(double),
 }
 
--- T.Type -> terralib.type
+-- (T.Type | 'string') -> terralib.type
 local function toRType(typ)
-  if typ:isprimitive() then
+  if typ == 'string' then
+    return &int8
+  elseif typ:isprimitive() then
     return typ:terratype()
   elseif typ:isvector() then
     return Vector(toRType(typ.type), typ.N)
@@ -444,9 +446,11 @@ local function toRType(typ)
   else assert(false) end
 end
 
--- M.ExprConst -> T.Type
+-- M.ExprConst -> (T.Type | 'string')
 local function inferType(lit)
-  if type(lit) == 'boolean' then
+  if type(lit) == 'string' then
+    return 'string'
+  elseif type(lit) == 'boolean' then
     return L.bool
   elseif type(lit) == 'number' then
     if lit == math.floor(lit) then
@@ -461,10 +465,12 @@ local function inferType(lit)
   else assert(false) end
 end
 
--- M.ExprConst, T.Type? -> RG.rexpr
+-- M.ExprConst, (T.Type | 'string')? -> RG.rexpr
 local function toRConst(lit, typ)
   typ = typ or inferType(lit)
-  if typ:iskey() then
+  if typ == 'string' then
+    return rexpr lit end
+  elseif typ:iskey() then
     return typ.relation:translateIndex(lit)
   elseif type(lit) == 'boolean' then
     assert(typ == L.bool)
@@ -2018,10 +2024,10 @@ function M.AST.While:toRQuote(ctxt)
     end
   end
 end
-function M.AST.Print:toRQuote(ctxt)
+function M.AST.TerraCall:toRQuote(ctxt)
   local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
   return rquote
-    C.printf([self.fmt], valRExprs)
+    [self.terraFun](valRExprs)
   end
 end
 function M.AST.Dump:toRQuote(ctxt)

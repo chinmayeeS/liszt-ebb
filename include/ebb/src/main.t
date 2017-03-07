@@ -32,16 +32,17 @@ local isFunction = function(x) return L.is_function(x) end
 local isGlobal   = function(x) return L.is_global(x) end
 local isRelation = function(x) return L.is_relation(x) end
 local isSubset   = function(x) return L.is_subset(x) end
+local isTerraFun = function(x) return terralib.isfunction(x) end
 
 -------------------------------------------------------------------------------
 -- Control language AST
 -------------------------------------------------------------------------------
 
--- ExprConst = boolean | number | ExprConst[N]
+-- ExprConst = boolean | number | string | ExprConst[N]
 
 -- any -> boolean
 local function isExprConst(x)
-  if type(x) == 'boolean' or type(x) == 'number' then
+  if type(x) == 'boolean' or type(x) == 'number' or type(x) == 'string' then
     return true
   end
   if not terralib.israwlist(x) then
@@ -68,7 +69,7 @@ local ADT AST
        | FillField { fld : Field, val : ExprConst }
        | SetGlobal { global : Global, expr : Expr }
        | While { cond : Cond, spmd : boolean, body : Stmt? }
-       | Print { fmt : string, vals : Expr* }
+       | TerraCall { fun : TerraFun, vals : Expr* }
        | Dump { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Load { rel : Relation, flds : string*, file : string, vals : Expr* }
   Cond = Literal { val : boolean }
@@ -86,6 +87,7 @@ local ADT AST
   extern Global    isGlobal
   extern Relation  isRelation
   extern Subset    isSubset
+  extern TerraFun  isTerraFun
 end
 M.AST = AST
 
@@ -211,10 +213,10 @@ function M.END()
   stack[#stack] = nil
 end
 
--- string, (ExprConst | AST.Expr)* -> ()
-function M.PRINT(fmt, ...)
+-- terralib.function, AST.Expr* -> ()
+function M.CALL(terraFun, ...)
   local args = terralib.newlist({...}):map(function(x)
     return isExprConst(x) and AST.Const(x) or x
   end)
-  M.stmts():insert(AST.Print(fmt, args))
+  M.stmts():insert(AST.TerraCall(terraFun, args))
 end
