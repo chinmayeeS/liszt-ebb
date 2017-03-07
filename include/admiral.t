@@ -1127,7 +1127,7 @@ function AST.UserFunction:toTask(info)
       task tsk([ctxt:signature()]) where
         dom <= univ, [ctxt.privileges]
       do [body] end
-    elseif not isEmpty(info.inserts) then
+    elseif not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
       -- HACK: Need to manually parallelize insertion kernels.
       -- TODO: Only handling the simple case of functions without stencils,
       -- which don't require any changes.
@@ -1917,7 +1917,7 @@ function M.AST.ForEach:toRQuote(ctxt)
   -- Collect arguments for call
   local actualArgs = newlist()
   local c = RG.newsymbol(nil, 'c')
-  if RG.config['parallelize'] and not isEmpty(info.inserts) then
+  if RG.config['parallelize'] and not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
     -- HACK: Need to manually parallelize insertion kernels.
     assert(not self.subset)
     actualArgs:insert(rexpr [ctxt.primPart[self.rel]][c] end)
@@ -1942,14 +1942,14 @@ function M.AST.ForEach:toRQuote(ctxt)
     local op = fCtxt.globalReduceOp
     callQuote =
       (op == '+')   and rquote [retSym] +=   [callExpr]     end or
-      (op == '-')   and rquote [retSym] +=   -[callExpr]    end or
+      (op == '-')   and rquote [retSym] +=   [callExpr]     end or
       (op == '*')   and rquote [retSym] *=   [callExpr]     end or
-      (op == '/')   and rquote [retSym] *=   1.0/[callExpr] end or
+      (op == '/')   and rquote [retSym] *=   [callExpr]     end or
       (op == 'max') and rquote [retSym] max= [callExpr]     end or
       (op == 'min') and rquote [retSym] min= [callExpr]     end or
       assert(false)
   end
-  if RG.config['parallelize'] and not isEmpty(info.inserts) then
+  if RG.config['parallelize'] and not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
     -- HACK: Need to manually parallelize insertion kernels.
     callQuote = rquote
       for [c] in [ctxt.primColors] do
@@ -2303,6 +2303,7 @@ function A.translateAndRun(mapper_registration, link_flags)
   if RG.config['parallelize'] then
     local opts = newlist() -- RG.rexpr*
     opts:insertall(rels:map(function(rel) return ctxt.primPart[rel] end))
+    opts:insert(rexpr [ctxt.primColors] end)
     for _,domRel in ipairs(rels) do
       local autoPartFld = domRel:AutoPartitionField()
       if domRel:isFlexible() and autoPartFld then
