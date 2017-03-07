@@ -586,11 +586,15 @@ function Field:Fill(val)
 end
 
 function Relation:Dump(flds, file, ...)
-  M.stmts():insert(M.AST.Dump(self, terralib.newlist(flds),
-                              file, terralib.newlist({...})))
+  local args = terralib.newlist({...}):map(function(x)
+    return M.isExprConst(x) and M.AST.Const(x) or x
+  end)
+  M.stmts():insert(M.AST.Dump(self, terralib.newlist(flds), file, args))
 end
 
 function Relation:Load(flds, file, ...)
-  M.stmts():insert(M.AST.Load(self, terralib.newlist(flds),
-                              file, terralib.newlist({...})))
+  local args = terralib.newlist({...}):map(function(x)
+    return M.isExprConst(x) and M.AST.Const(x) or x
+  end)
+  M.stmts():insert(M.AST.Load(self, terralib.newlist(flds), file, args))
 end

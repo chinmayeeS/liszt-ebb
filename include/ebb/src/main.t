@@ -211,7 +211,10 @@ function M.END()
   stack[#stack] = nil
 end
 
--- string, AST.Expr* -> ()
+-- string, (ExprConst | AST.Expr)* -> ()
 function M.PRINT(fmt, ...)
-  M.stmts():insert(AST.Print(fmt, terralib.newlist({...})))
+  local args = terralib.newlist({...}):map(function(x)
+    return isExprConst(x) and AST.Const(x) or x
+  end)
+  M.stmts():insert(AST.Print(fmt, args))
 end
