@@ -138,8 +138,6 @@ function Context:error(ast, ...)
   self.diag:reporterror(ast, ...)
 end
 
-
-
 local function log_helper(ctxt, is_field, f_or_g, phase_type, node)
   -- Create an entry for the field or global
   local cache = ctxt.globals
@@ -193,6 +191,19 @@ local function log_helper(ctxt, is_field, f_or_g, phase_type, node)
     lookup.last_access = node
   end
 
+  -- check if this field access conflicts with deletion
+  -- (deletes count as write accesses, for all the relation's fields)
+  if is_field then
+    if ctxt.deletes[f_or_g:Relation()] then
+      local exclWrite = PhaseType.New{ write = true, centered = true }
+      if lookup.phase_type:join(exclWrite):iserror() then
+        ctxt:error(node, 'Access to field '..f_or_g:FullName()..
+                         ' conflicts with delete from relation '..
+                         f_or_g:Relation():Name())
+      end
+    end
+  end
+
   -- check if more than one globals need to be reduced
   if not is_field and phase_type:isUncenteredReduction() then
     local reduce_entry = ctxt.global_reduce
@@ -216,6 +227,9 @@ function Context:logglobal(global, phase_type, node)
 end
 
 function Context:loginsert(relation, node)
+  -- check that we don't also delete from the relation
+  -- (implicit: can only delete from the relation being mapped over, and can't
+  --  insert into that relation)
 
   -- check that none of the relation's fields have been accessed
   for field,record in pairs(self.fields) do
@@ -260,14 +274,23 @@ function Context:loginsert(relation, node)
 end
 
 function Context:logdelete(relation, node)
-  -- check that the key is centered happens in type-checking pass
+  -- check that the key is centered
+  -- (happens in type-checking pass)
 
-  -- log exclusive write accesses for all the relation's fields
+  -- check that the relation isn't also being inserted into
+  -- (implicit: can only delete from the relation being mapped over, and can't
+  --  insert into that relation)
+
+  -- check for field accesses conflicting with deletion
+  -- (deletes count as write accesses, for all the relation's fields)
+  local exclWrite = PhaseType.New{ write = true, centered = true }
   for _,f in ipairs(relation._fields) do
-    self:logfield(f, PhaseType.New {
-      write = true,
-      centered = true
-    }, node)
+    local fldAccess = self.fields[f]
+    if fldAccess and fldAccess.phase_type:join(exclWrite):iserror() then
+      self:error(node, 'Access to field '..f:FullName()..
+                       ' conflicts with delete from relation '..
+                       relation:Name())
+    end
   end
 
   -- check that this is the only delete for this function

@@ -1021,8 +1021,6 @@ function FunContext.New(info, argNames, argTypes)
     self.privileges:insert(RG.privilege(RG.writes, rg, '__valid'))
   end
   for rel,_ in pairs(info.deletes or {}) do
-    -- Phase checking has already marked all fields of the modified relation
-    -- as being written to.
     local rg = assert(self.relMap[rel])
     self.privileges:insert(RG.privilege(RG.reads, rg, '__valid'))
     self.privileges:insert(RG.privilege(RG.writes, rg, '__valid'))
