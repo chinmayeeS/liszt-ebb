@@ -131,6 +131,20 @@ function AST.Expr.__unm(x)
   return AST.UnaryOp('-', x)
 end
 
+-- ExprConst | AST.Expr, ExprConst | AST.Expr -> AST.Expr
+function M.MAX(lhs, rhs)
+  if isExprConst(lhs) then lhs = AST.Const(lhs) end
+  if isExprConst(rhs) then rhs = AST.Const(rhs) end
+  return AST.BinaryOp('max', lhs, rhs)
+end
+
+-- ExprConst | AST.Expr, ExprConst | AST.Expr -> AST.Expr
+function M.MIN(lhs, rhs)
+  if isExprConst(lhs) then lhs = AST.Const(lhs) end
+  if isExprConst(rhs) then rhs = AST.Const(rhs) end
+  return AST.BinaryOp('min', lhs, rhs)
+end
+
 -- boolean | AST.Cond, boolean | AST.Cond -> AST.Cond
 function M.AND(lhs, rhs)
   if type(lhs) == 'boolean' then lhs = AST.Literal(lhs) end

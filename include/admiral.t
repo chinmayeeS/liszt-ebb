@@ -2100,11 +2100,13 @@ function M.AST.BinaryOp:toRExpr(ctxt)
   local a = self.lhs:toRExpr(ctxt)
   local b = self.rhs:toRExpr(ctxt)
   return
-    (self.op == '+') and rexpr a + b end or
-    (self.op == '-') and rexpr a - b end or
-    (self.op == '*') and rexpr a * b end or
-    (self.op == '/') and rexpr a / b end or
-    (self.op == '%') and rexpr a % b end or
+    (self.op == '+')   and rexpr    a + b end or
+    (self.op == '-')   and rexpr    a - b end or
+    (self.op == '*')   and rexpr    a * b end or
+    (self.op == '/')   and rexpr    a / b end or
+    (self.op == '%')   and rexpr    a % b end or
+    (self.op == 'max') and rexpr max(a,b) end or
+    (self.op == 'min') and rexpr min(a,b) end or
     assert(false)
 end
 function M.AST.UnaryOp:toRExpr(ctxt)
