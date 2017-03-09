@@ -55,6 +55,9 @@ local function is_valid_lua_identifier(name)
   return true
 end
 
+local function is_int(x)
+  return type(x) == 'number' and x == math.floor(x)
+end
 
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
@@ -106,7 +109,7 @@ function Relation:isFlexible()    return self._mode == 'FLEXIBLE'   end
 --   -- if mode == 'FLEXIBLE':
 --   size = 100,
 --   max_skew = 3.0,
---   max_xfer_rate = 0.3,
+--   max_xfer_num = 10,
 --   xfer_stencil = {{0,0,1},{0,0,-1},...},
 -- }
 local relation_uid = 0
@@ -144,8 +147,8 @@ function R.NewRelation(params)
     if type(params.max_skew) ~= 'number' then
       error("NewRelation() expects 'max_skew' numeric argument", 2)
     end
-    if type(params.max_xfer_rate) ~= 'number' then
-      error("NewRelation() expects 'max_xfer_rate' numeric argument", 2)
+    if not is_int(params.max_xfer_num) then
+      error("NewRelation() expects 'max_xfer_num' integer argument", 2)
     end
     if not terralib.israwlist(params.xfer_stencil) then
       error("NewRelation(): 'xfer_stencil' argument must be a list", 2)
@@ -190,7 +193,7 @@ function R.NewRelation(params)
   elseif mode == 'FLEXIBLE' then
     size = params.size
     rawset(rel, '_max_skew', params.max_skew)
-    rawset(rel, '_max_xfer_rate', params.max_xfer_rate)
+    rawset(rel, '_max_xfer_num', params.max_xfer_num)
     rawset(rel, '_xfer_stencil', terralib.newlist(params.xfer_stencil))
   end
   rawset(rel, '_logical_size',  size)
@@ -237,8 +240,8 @@ end
 function Relation:MaxSkew()
   return self._max_skew
 end
-function Relation:MaxXferRate()
-  return self._max_xfer_rate
+function Relation:MaxXferNum()
+  return self._max_xfer_num
 end
 function Relation:XferStencil()
   return self._xfer_stencil

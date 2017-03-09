@@ -708,7 +708,7 @@ end)
 -- () -> int
 function R.Relation:perDirQueueSize()
   assert(self:isFlexible() and self:AutoPartitionField())
-  return math.ceil(self:primPartSize() * self:MaxXferRate())
+  return self:MaxXferNum()
 end
 
 -- RG.symbol -> RG.rquote
