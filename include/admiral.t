@@ -749,19 +749,23 @@ R.Relation.emitQPartColorOff = terralib.memoize(function(self)
   return qPartColorOff
 end)
 
--- RG.symbol, RG.symbol, RG.symbol, RG.symbol -> RG.rquote
-function R.Relation:emitQueuePartInit(q, qpsrc, qpdst, colors)
+-- RG.symbol, RG.symbol, RG.symbol*, RG.symbol -> RG.rquote
+function R.Relation:emitQueuePartInit(q, qSrcPart, qDstParts, colors)
   assert(self:isFlexible() and self:AutoPartitionField())
   local perDirQueueSize = self:perDirQueueSize()
   local qPartColorOff = self:emitQPartColorOff()
-  return rquote
-    var [qpsrc] = partition(equal, q, colors)
-    var coloring = RG.c.legion_point_coloring_create()
-    for c in colors do
-      for qPartIdx = 0, [#self:XferStencil()] do
+  local quotes = newlist() -- RG.rquote*
+  quotes:insert(rquote
+    var [qSrcPart] = partition(equal, q, colors)
+  end)
+  for i,stencil in ipairs(self:XferStencil()) do
+    local qPartIdx = i - 1
+    quotes:insert(rquote
+      var coloring = RG.c.legion_point_coloring_create()
+      var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
+      for c in colors do
         var qPartBase : int64
-        for qBase in qpsrc[(c - qPartColorOff(qPartIdx) + {NX,NY,NZ})
-                           % {NX,NY,NZ}] do
+        for qBase in qSrcPart[(c - colorOff + {NX,NY,NZ}) % {NX,NY,NZ}] do
           qPartBase = __raw(qBase).value + qPartIdx * perDirQueueSize
           break
         end
@@ -770,10 +774,11 @@ function R.Relation:emitQueuePartInit(q, qpsrc, qpdst, colors)
           [RG.c.legion_ptr_t]{value = qPartBase},
           [RG.c.legion_ptr_t]{value = qPartBase + perDirQueueSize - 1})
       end
-    end
-    var [qpdst] = partition(disjoint, q, coloring, colors)
-    RG.c.legion_point_coloring_destroy(coloring)
+      var [qDstParts[i]] = partition(disjoint, q, coloring, colors)
+      RG.c.legion_point_coloring_destroy(coloring)
+    end)
   end
+  return rquote [quotes] end
 end
 
 -- () -> RG.task
@@ -871,13 +876,18 @@ function R.Relation:emitPrimPartUpdate(ctxt)
   if self:isFlexible() then
     local pushAll = self:emitPushAll()
     local pullAll = self:emitPullAll()
+    local pullQuotes = ctxt.qDstParts[self]:map(function(qDstPart)
+      return rquote
+        for c in [ctxt.primColors] do
+          pullAll(c, [ctxt.primPart[self]][c], [qDstPart][c])
+        end
+      end
+    end)
     return rquote
       for c in [ctxt.primColors] do
         pushAll(c, [ctxt.primPart[self]][c], [ctxt.qSrcPart[self]][c])
       end
-      for c in [ctxt.primColors] do
-        pullAll(c, [ctxt.primPart[self]][c], [ctxt.qDstPart[self]][c])
-      end
+      [pullQuotes]
       -- TODO: Check that all out-queues have been emptied out.
     end
   else
@@ -2174,7 +2184,7 @@ function A.translateAndRun(mapper_registration, link_flags)
     primPart   = {},  -- map(R.Relation, RG.symbol)
     queueMap   = {},  -- map(R.Relation, RG.symbol)
     qSrcPart   = {},  -- map(R.Relation, RG.symbol)
-    qDstPart   = {},  -- map(R.Relation, RG.symbol)
+    qDstParts  = {},  -- map(R.Relation, RG.symbol*)
     primColors = nil, -- RG.symbol
   }
   -- Collect declarations
@@ -2263,14 +2273,17 @@ function A.translateAndRun(mapper_registration, link_flags)
       -- Emit transfer queues for flexible relations with an auto-partitioning
       -- constraint.
       if rel:isFlexible() and rel:AutoPartitionField() then
-        local q = RG.newsymbol(nil, rel:Name()..'_queue')
-        ctxt.queueMap[rel] = q
-        local qpsrc = RG.newsymbol(nil, rel:Name()..'_qSrcPart')
-        ctxt.qSrcPart[rel] = qpsrc
-        local qpdst = RG.newsymbol(nil, rel:Name()..'_qDstPart')
-        ctxt.qDstPart[rel] = qpdst
-        header:insert(rel:emitQueueInit(q))
-        header:insert(rel:emitQueuePartInit(q, qpsrc, qpdst, ctxt.primColors))
+        ctxt.queueMap[rel] = RG.newsymbol(nil, rel:Name()..'_queue')
+        ctxt.qSrcPart[rel] = RG.newsymbol(nil, rel:Name()..'_qSrcPart')
+        ctxt.qDstParts[rel] = newlist()
+        for i = 1,#rel:XferStencil() do
+          local qDstPart = RG.newsymbol(nil, rel:Name()..'_qDstPart_'..(i-1))
+          ctxt.qDstParts[rel]:insert(qDstPart)
+        end
+        header:insert(rel:emitQueueInit(ctxt.queueMap[rel]))
+        header:insert(
+          rel:emitQueuePartInit(ctxt.queueMap[rel], ctxt.qSrcPart[rel],
+                                ctxt.qDstParts[rel], ctxt.primColors))
       end
     end
   end
