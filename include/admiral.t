@@ -824,6 +824,9 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   where
     reads(r), writes(r.__valid), reads writes(q), r * q
   do
+    for qPtr in q do
+      qPtr.__valid = false
+    end
     for rPtr in r do
       if rPtr.__valid then
         var rColor = rngElemColor(rPtr.[autoPartFld:Name()])
@@ -847,24 +850,31 @@ end)
 -- () -> RG.task
 R.Relation.emitPullAll = terralib.memoize(function(self)
   assert(self:isFlexible() and self:AutoPartitionField())
-  local task pullAll
-    (color : int3d, r : self:regionType(), q : self:regionType())
-  where
-    reads writes(r), reads(q), writes(q.__valid), r * q
-  do
-    for qPtr in q do
-      -- TODO: Check that the element is coming to the appropriate partition.
-      if qPtr.__valid then
-        for rPtr in r do
-          if not rPtr.__valid then
-            r[rPtr] = q[qPtr]
-            qPtr.__valid = false
-            break
+  local queues = newlist() -- RG.symbol*
+  local privileges = newlist() -- RG.privilege*
+  for i = 1,#self:XferStencil() do
+    local q = RG.newsymbol(self:regionType(), 'q'..(i-1))
+    queues:insert(q)
+    privileges:insert(RG.privilege(RG.reads, q))
+  end
+  local task pullAll(color : int3d, r : self:regionType(), [queues])
+  where reads writes(r), [privileges] do
+    [queues:map(function(q) return rquote
+      for qPtr in [q] do
+        -- TODO: Check that the element is coming to the appropriate partition.
+        if qPtr.__valid then
+          var copied = false
+          for rPtr in r do
+            if not rPtr.__valid then
+              r[rPtr] = q[qPtr]
+              copied = true
+              break
+            end
           end
+          RG.assert(copied, 'Ran out of space on sub-partition')
         end
-        RG.assert(not qPtr.__valid, 'Ran out of space on sub-partition')
       end
-    end
+    end end)]
   end
   registerTask(pullAll, self:Name()..'_pullAll')
   return pullAll
@@ -876,18 +886,16 @@ function R.Relation:emitPrimPartUpdate(ctxt)
   if self:isFlexible() then
     local pushAll = self:emitPushAll()
     local pullAll = self:emitPullAll()
-    local pullQuotes = ctxt.qDstParts[self]:map(function(qDstPart)
-      return rquote
-        for c in [ctxt.primColors] do
-          pullAll(c, [ctxt.primPart[self]][c], [qDstPart][c])
-        end
-      end
-    end)
     return rquote
       for c in [ctxt.primColors] do
         pushAll(c, [ctxt.primPart[self]][c], [ctxt.qSrcPart[self]][c])
       end
-      [pullQuotes]
+      for c in [ctxt.primColors] do
+        pullAll(c, [ctxt.primPart[self]][c],
+                [ctxt.qDstParts[self]:map(function(qDstPart)
+                  return rexpr qDstPart[c] end
+                end)])
+      end
       -- TODO: Check that all out-queues have been emptied out.
     end
   else
