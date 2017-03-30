@@ -229,7 +229,7 @@ end
 local NAME_CACHE = {} -- map(string, (* -> *) | RG.task)
 
 -- RG.task, string -> ()
-local function setTaskName(tsk, name)
+local function registerTask(tsk, name)
   name = idSanitize(name)
   while NAME_CACHE[name] do
     name = name..'_'
@@ -237,16 +237,22 @@ local function setTaskName(tsk, name)
   NAME_CACHE[name] = tsk
   tsk:setname(name)
   tsk.ast.name[1] = name -- TODO: Dangerous
+  if DEBUG then
+    prettyPrintTask(tsk)
+  end
 end
 
 -- (* -> *), string -> ()
-local function setFunName(fun, name)
+local function registerFun(fun, name)
   name = idSanitize(name)
   while NAME_CACHE[name] do
     name = name..'_'
   end
   NAME_CACHE[name] = fun
   fun:setname(name)
+  if DEBUG then
+    prettyPrintFun(fun)
+  end
 end
 
 local TerraList = getmetatable(newlist())
@@ -345,8 +351,7 @@ local emitDotProduct = terralib.memoize(function(T, N)
   local terra dot([a], [b]) : T
     return [expr]
   end
-  setFunName(dot, 'dot_'..tostring(T)..'_'..tostring(N))
-  if DEBUG then prettyPrintFun(dot) end
+  registerFun(dot, 'dot_'..tostring(T)..'_'..tostring(N))
   return dot
 end)
 
@@ -366,8 +371,7 @@ local emitVectorVectorOp = terralib.memoize(function(op, T, N)
   local terra vvop([a], [b]) : Vector(T,N)
     return array([elems])
   end
-  setFunName(vvop, 'vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
-  if DEBUG then prettyPrintFun(vvop) end
+  registerFun(vvop, 'vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   return vvop
 end)
 
@@ -387,8 +391,7 @@ local emitVectorScalarOp = terralib.memoize(function(op, T, N)
   local terra vsop([a], [b]) : Vector(T,N)
     return array([elems])
   end
-  setFunName(vsop, 'vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
-  if DEBUG then prettyPrintFun(vsop) end
+  registerFun(vsop, 'vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   return vsop
 end)
 
@@ -555,8 +558,7 @@ R.Relation.emitVectorToIndexType = terralib.memoize(function(self)
       return [indexType]({__ptr = [indexType.impl_type]{v[0], v[1], v[2]}})
     end
   else assert(false) end
-  setFunName(vec2idx, 'vec'..tostring(#dims)..'d_to_idx')
-  if DEBUG then prettyPrintFun(vec2idx) end
+  registerFun(vec2idx, 'vec'..tostring(#dims)..'d_to_idx')
   return vec2idx
 end)
 
@@ -700,8 +702,7 @@ R.Relation.emitElemColor = terralib.memoize(function(self)
     -- base region to calculate offsets.
     assert(false)
   end
-  setTaskName(elemColor, self:Name()..'_elemColor')
-  if DEBUG then prettyPrintTask(elemColor) end
+  registerTask(elemColor, self:Name()..'_elemColor')
   return elemColor
 end)
 
@@ -744,8 +745,7 @@ R.Relation.emitQPartColorOff = terralib.memoize(function(self)
     -- TODO: Not checking if no case applies.
     return colorOff
   end
-  setTaskName(qPartColorOff, self:Name()..'_qPartColorOff')
-  if DEBUG then prettyPrintTask(qPartColorOff) end
+  registerTask(qPartColorOff, self:Name()..'_qPartColorOff')
   return qPartColorOff
 end)
 
@@ -803,8 +803,7 @@ R.Relation.emitPush = terralib.memoize(function(self)
     end
     RG.assert(not rPtr.__valid, 'Transfer queue ran out of space')
   end
-  setTaskName(push, self:Name()..'_push')
-  if DEBUG then prettyPrintTask(push) end
+  registerTask(push, self:Name()..'_push')
   return push
 end)
 
@@ -836,8 +835,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
       end
     end
   end
-  setTaskName(pushAll, self:Name()..'_pushAll')
-  if DEBUG then prettyPrintTask(pushAll) end
+  registerTask(pushAll, self:Name()..'_pushAll')
   return pushAll
 end)
 
@@ -863,8 +861,7 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
       end
     end
   end
-  setTaskName(pullAll, self:Name()..'_pullAll')
-  if DEBUG then prettyPrintTask(pullAll) end
+  registerTask(pullAll, self:Name()..'_pullAll')
   return pullAll
 end)
 
@@ -1150,8 +1147,7 @@ function AST.UserFunction:toTask(info)
     do [body] end
   end
   -- Finalize task
-  setTaskName(tsk, info.name)
-  if DEBUG then prettyPrintTask(tsk) end
+  registerTask(tsk, info.name)
   return tsk, ctxt
 end
 
@@ -1856,12 +1852,8 @@ if USE_HDF then
       release(s.[flds])
       detach(hdf5, s.[flds])
     end
-    setFunName(create, self:Name()..'_hdf5create_'..flds:join('_'))
-    setTaskName(dump, self:Name()..'_hdf5dump_'..flds:join('_'))
-    if DEBUG then
-      prettyPrintFun(create)
-      prettyPrintTask(dump)
-    end
+    registerFun(create, self:Name()..'_hdf5create_'..flds:join('_'))
+    registerTask(dump, self:Name()..'_hdf5dump_'..flds:join('_'))
     return dump
   end
 
@@ -1888,8 +1880,7 @@ if USE_HDF then
       release(s.[flds])
       detach(hdf5, s.[flds])
     end
-    setTaskName(load, self:Name()..'_hdf5load_'..flds:join('_'))
-    if DEBUG then prettyPrintTask(load) end
+    registerTask(load, self:Name()..'_hdf5load_'..flds:join('_'))
     return load
   end
 
@@ -2159,8 +2150,7 @@ local function emitFillTaskCalls(ctxt, fillStmts)
       end
     end
     fillTasks[rel] = tsk
-    setTaskName(tsk, rel:Name()..'_fillTask')
-    if DEBUG then prettyPrintTask(tsk) end
+    registerTask(tsk, rel:Name()..'_fillTask')
   end
   local calls = newlist() -- RG.rquote*
   for rel,tsk in pairs(fillTasks) do
@@ -2327,9 +2317,8 @@ function A.translateAndRun(mapper_registration, link_flags)
       [body]
     end
   end
-  setTaskName(main, 'main')
+  registerTask(main, 'main')
   if DEBUG then
-    prettyPrintTask(main)
     print('regentlib.start('..main:getname()[1]..')')
   end
   -- Emit to executable or run
