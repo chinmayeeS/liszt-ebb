@@ -706,101 +706,58 @@ R.Relation.emitElemColor = terralib.memoize(function(self)
   return elemColor
 end)
 
--- () -> int
-function R.Relation:perDirQueueSize()
-  assert(self:isFlexible() and self:AutoPartitionField())
-  return self:MaxXferNum()
-end
-
 -- RG.symbol -> RG.rquote
 function R.Relation:emitQueueInit(q)
   assert(self:isFlexible() and self:AutoPartitionField())
-  local queueSize = self:perDirQueueSize() * #self:XferStencil()
-  local ispaceExpr = rexpr ispace(ptr, queueSize * NUM_PRIM_PARTS) end
+  local size = self:MaxXferNum() * NUM_PRIM_PARTS
   local fspaceExpr = self:fieldSpace()
   return rquote
-    var [q] = region(ispaceExpr, fspaceExpr)
-    new(ptr(fspaceExpr, q), queueSize * NUM_PRIM_PARTS)
+    var [q] = region(ispace(ptr, size), fspaceExpr)
+    new(ptr(fspaceExpr, q), size)
     fill(q.__valid, false)
   end
 end
 
--- () -> RG.task
-R.Relation.emitQPartColorOff = terralib.memoize(function(self)
+-- ProgramContext, int -> RG.rquote
+function R.Relation:emitQueuePartInit(ctxt, i)
   assert(self:isFlexible() and self:AutoPartitionField())
-  local qPartIdx = RG.newsymbol(nil, 'qPartIdx')
-  local colorOff = RG.newsymbol(nil, 'colorOff')
-  local conds = newlist()
-  for i,stencil in ipairs(self:XferStencil()) do
-    conds:insert(rquote
-      if qPartIdx == [i-1] then
-        colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
-      end
-    end)
-  end
-  local qPartColorOff __demand(__inline) task qPartColorOff(i : int)
-    var [qPartIdx] = i
-    var [colorOff] = int3d{0,0,0};
-    [conds]
-    -- TODO: Not checking if no case applies.
-    return colorOff
-  end
-  registerTask(qPartColorOff, self:Name()..'_qPartColorOff')
-  return qPartColorOff
-end)
-
--- RG.symbol, RG.symbol, RG.symbol*, RG.symbol -> RG.rquote
-function R.Relation:emitQueuePartInit(q, qSrcPart, qDstParts, colors)
-  assert(self:isFlexible() and self:AutoPartitionField())
-  local perDirQueueSize = self:perDirQueueSize()
-  local qPartColorOff = self:emitQPartColorOff()
-  local quotes = newlist() -- RG.rquote*
-  quotes:insert(rquote
+  local q = ctxt.queues[self][i]
+  local qSrcPart = ctxt.qSrcParts[self][i]
+  local qDstPart = ctxt.qDstParts[self][i]
+  local colors = ctxt.primColors
+  local stencil = self:XferStencil()[i]
+  return rquote
     var [qSrcPart] = partition(equal, q, colors)
-  end)
-  for i,stencil in ipairs(self:XferStencil()) do
-    local qPartIdx = i - 1
-    quotes:insert(rquote
-      var coloring = RG.c.legion_point_coloring_create()
-      var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
-      for c in colors do
-        var qPartBase : int64
-        for qBase in qSrcPart[(c - colorOff + {NX,NY,NZ}) % {NX,NY,NZ}] do
-          qPartBase = __raw(qBase).value + qPartIdx * perDirQueueSize
-          break
-        end
-        RG.c.legion_point_coloring_add_range(
-          coloring, c,
-          [RG.c.legion_ptr_t]{value = qPartBase},
-          [RG.c.legion_ptr_t]{value = qPartBase + perDirQueueSize - 1})
+    var coloring = RG.c.legion_point_coloring_create()
+    var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
+    for c in colors do
+      var srcBase : int64
+      for qptr in qSrcPart[(c - colorOff + {NX,NY,NZ}) % {NX,NY,NZ}] do
+        srcBase = __raw(qptr).value
+        break
       end
-      var [qDstParts[i]] = partition(disjoint, q, coloring, colors)
-      RG.c.legion_point_coloring_destroy(coloring)
-    end)
+      RG.c.legion_point_coloring_add_range(
+        coloring, c,
+        [RG.c.legion_ptr_t]{value = srcBase},
+        [RG.c.legion_ptr_t]{value = srcBase + [self:MaxXferNum()] - 1})
+    end
+    var [qDstPart] = partition(disjoint, q, coloring, colors)
+    RG.c.legion_point_coloring_destroy(coloring)
   end
-  return rquote [quotes] end
 end
 
 -- () -> RG.task
 R.Relation.emitPush = terralib.memoize(function(self)
   assert(self:isFlexible() and self:AutoPartitionField())
-  local perDirQueueSize = self:perDirQueueSize()
-  local fieldSpace = self:fieldSpace()
   local push __demand(__inline) task push
-    (r        : self:regionType(),
-     rPtr     : ptr(fieldSpace, r),
-     q        : self:regionType(),
-     qPartIdx : int)
+    (r    : self:regionType(),
+     rPtr : ptr(self:fieldSpace(), r),
+     q    : self:regionType())
   where
     reads(r), writes(r.__valid), reads writes(q), r * q
   do
-    var qPartBase : int64
-    for qBase in q do
-      qPartBase = __raw(qBase).value + qPartIdx * perDirQueueSize
-      break
-    end
-    for qPtr = qPartBase, qPartBase + perDirQueueSize do
-      if not q[qPtr].__valid then
+    for qPtr in q do
+      if not qPtr.__valid then
         q[qPtr] = r[rPtr]
         rPtr.__valid = false
         break
@@ -816,28 +773,48 @@ end)
 R.Relation.emitPushAll = terralib.memoize(function(self)
   local autoPartFld = self:AutoPartitionField()
   assert(self:isFlexible() and autoPartFld)
-  local qPartColorOff = self:emitQPartColorOff()
+  -- utilized sub-tasks
   local rngElemColor = autoPartFld:Type().relation:emitElemColor()
   local push = self:emitPush()
-  local task pushAll
-    (color : int3d, r : self:regionType(), q : self:regionType())
-  where
-    reads(r), writes(r.__valid), reads writes(q), r * q
-  do
-    for qPtr in q do
-      qPtr.__valid = false
-    end
-    for rPtr in r do
+  -- code elements to fill in
+  local qs = newlist() -- RG.symbol*
+  local privileges = newlist() -- RG.privilege*
+  local constraints = newlist() -- RG.constraint*
+  local queueInits = newlist() -- RG.rquote*
+  local moveChecks = newlist() -- RG.rquote*
+  -- visible symbols
+  local r = RG.newsymbol(self:regionType(), 'r')
+  local rPtr = RG.newsymbol(nil, 'rPtr')
+  local partColor = RG.newsymbol(int3d, 'partColor')
+  local elemColor = RG.newsymbol(int3d, 'elemColor')
+  -- fill in parameters & movement cases
+  for i,stencil in ipairs(self:XferStencil()) do
+    local q = RG.newsymbol(self:regionType(), 'q'..(i-1))
+    qs:insert(q)
+    privileges:insert(RG.privilege(RG.reads, q))
+    privileges:insert(RG.privilege(RG.writes, q))
+    constraints:insert(RG.constraint(r, q, RG.disjointness))
+    queueInits:insert(rquote
+      for qPtr in q do
+        qPtr.__valid = false
+      end
+    end)
+    moveChecks:insert(rquote
+      var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
+      if elemColor == (partColor + colorOff + {NX,NY,NZ}) % {NX,NY,NZ} then
+        push(r, rPtr, q)
+      end
+    end)
+  end
+  -- synthesize task
+  local task pushAll([partColor], [r], [qs])
+  where reads(r), writes(r.__valid), [privileges], [constraints] do
+    [queueInits]
+    for [rPtr] in r do
       if rPtr.__valid then
-        var rColor = rngElemColor(rPtr.[autoPartFld:Name()])
-        if rColor ~= color then
-          for qPartIdx = 0, [#self:XferStencil()] do
-            if rColor ==
-              (color + qPartColorOff(qPartIdx) + {NX,NY,NZ}) % {NX,NY,NZ} then
-              push(r, rPtr, q,  qPartIdx)
-              break
-            end
-          end
+        var [elemColor] = rngElemColor(rPtr.[autoPartFld:Name()])
+        if elemColor ~= partColor then
+          [moveChecks]
           RG.assert(not rPtr.__valid, 'Element moved past predicted stencil')
         end
       end
@@ -860,7 +837,7 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
   local task pullAll(color : int3d, r : self:regionType(), [queues])
   where reads writes(r), [privileges] do
     [queues:map(function(q) return rquote
-      for qPtr in [q] do
+      for qPtr in q do
         -- TODO: Check that the element is coming to the appropriate partition.
         if qPtr.__valid then
           var copied = false
@@ -888,7 +865,10 @@ function R.Relation:emitPrimPartUpdate(ctxt)
     local pullAll = self:emitPullAll()
     return rquote
       for c in [ctxt.primColors] do
-        pushAll(c, [ctxt.primPart[self]][c], [ctxt.qSrcPart[self]][c])
+        pushAll(c, [ctxt.primPart[self]][c],
+                [ctxt.qSrcParts[self]:map(function(qSrcPart)
+                  return rexpr qSrcPart[c] end
+                end)])
       end
       for c in [ctxt.primColors] do
         pullAll(c, [ctxt.primPart[self]][c],
@@ -2190,8 +2170,8 @@ function A.translateAndRun(mapper_registration, link_flags)
     relMap     = {},  -- map(R.Relation, RG.symbol)
     subsetMap  = {},  -- map(R.Subset, RG.symbol)
     primPart   = {},  -- map(R.Relation, RG.symbol)
-    queueMap   = {},  -- map(R.Relation, RG.symbol)
-    qSrcPart   = {},  -- map(R.Relation, RG.symbol)
+    queues     = {},  -- map(R.Relation, RG.symbol*)
+    qSrcParts  = {},  -- map(R.Relation, RG.symbol*)
     qDstParts  = {},  -- map(R.Relation, RG.symbol*)
     primColors = nil, -- RG.symbol
   }
@@ -2281,17 +2261,19 @@ function A.translateAndRun(mapper_registration, link_flags)
       -- Emit transfer queues for flexible relations with an auto-partitioning
       -- constraint.
       if rel:isFlexible() and rel:AutoPartitionField() then
-        ctxt.queueMap[rel] = RG.newsymbol(nil, rel:Name()..'_queue')
-        ctxt.qSrcPart[rel] = RG.newsymbol(nil, rel:Name()..'_qSrcPart')
+        ctxt.queues[rel] = newlist()
+        ctxt.qSrcParts[rel] = newlist()
         ctxt.qDstParts[rel] = newlist()
         for i = 1,#rel:XferStencil() do
+          local q = RG.newsymbol(nil, rel:Name()..'_queue_'..(i-1))
+          ctxt.queues[rel]:insert(q)
+          local qSrcPart = RG.newsymbol(nil, rel:Name()..'_qSrcPart_'..(i-1))
+          ctxt.qSrcParts[rel]:insert(qSrcPart)
           local qDstPart = RG.newsymbol(nil, rel:Name()..'_qDstPart_'..(i-1))
           ctxt.qDstParts[rel]:insert(qDstPart)
+          header:insert(rel:emitQueueInit(q))
+          header:insert(rel:emitQueuePartInit(ctxt, i))
         end
-        header:insert(rel:emitQueueInit(ctxt.queueMap[rel]))
-        header:insert(
-          rel:emitQueuePartInit(ctxt.queueMap[rel], ctxt.qSrcPart[rel],
-                                ctxt.qDstParts[rel], ctxt.primColors))
       end
     end
   end
