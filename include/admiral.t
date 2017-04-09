@@ -754,7 +754,7 @@ R.Relation.emitPush = terralib.memoize(function(self)
      rPtr : ptr(self:fieldSpace(), r),
      q    : self:regionType())
   where
-    reads(r), writes(r.__valid), reads writes(q), r * q
+    reads(r), writes(r.__valid), reads writes(q)
   do
     for qPtr in q do
       if not qPtr.__valid then
@@ -779,7 +779,6 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   -- code elements to fill in
   local qs = newlist() -- RG.symbol*
   local privileges = newlist() -- RG.privilege*
-  local constraints = newlist() -- RG.constraint*
   local queueInits = newlist() -- RG.rquote*
   local moveChecks = newlist() -- RG.rquote*
   -- visible symbols
@@ -793,7 +792,6 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     qs:insert(q)
     privileges:insert(RG.privilege(RG.reads, q))
     privileges:insert(RG.privilege(RG.writes, q))
-    constraints:insert(RG.constraint(r, q, RG.disjointness))
     queueInits:insert(rquote
       for qPtr in q do
         qPtr.__valid = false
@@ -808,7 +806,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   end
   -- synthesize task
   local task pushAll([partColor], [r], [qs])
-  where reads(r), writes(r.__valid), [privileges], [constraints] do
+  where reads(r), writes(r.__valid), [privileges] do
     [queueInits]
     for [rPtr] in r do
       if rPtr.__valid then
