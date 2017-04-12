@@ -662,7 +662,11 @@ function R.Relation:emitRegionInit(rg)
   local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
   local allocQuote = rquote end
   if not self:isGrid() then
-    allocQuote = rquote new(ptr(fspaceExpr, rg), [self:Dims()[1]]) end
+    local size = self:Dims()[1]
+    if RG.config['parallelize'] then
+      size = self:primPartSize() * NUM_PRIM_PARTS
+    end
+    allocQuote = rquote new(ptr(fspaceExpr, rg), [size]) end
   end
   local fillQuote = rquote end
   if self:isFlexible() then
@@ -677,29 +681,6 @@ end
 
 -- RG.symbol, RG.symbol, RG.symbol -> RG.rquote
 function R.Relation:emitPrimPartInit(r, p, colors)
-  if self:isFlexible() and self:AutoPartitionField() then
-    local primPartSize = self:primPartSize()
-    return rquote
-      var coloring = RG.c.legion_point_coloring_create()
-      for x = 0, NX do
-        for y = 0, NY do
-          for z = 0, NZ do
-            var rBase : int64
-            for rStart in r do
-              rBase = __raw(rStart).value + (x*NY*NZ + y*NZ + z) * primPartSize
-              break
-            end
-            RG.c.legion_point_coloring_add_range(
-              coloring, int3d{x,y,z},
-              [RG.c.legion_ptr_t]{value = rBase},
-              [RG.c.legion_ptr_t]{value = rBase + primPartSize - 1})
-          end
-        end
-      end
-      var [p] = partition(disjoint, r, coloring, colors)
-      RG.c.legion_point_coloring_destroy(coloring)
-    end
-  end
   return rquote
     var [p] = partition(equal, r, colors)
   end
