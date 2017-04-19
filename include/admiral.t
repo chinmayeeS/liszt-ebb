@@ -2015,6 +2015,22 @@ function M.AST.While:toRQuote(ctxt)
     end
   end
 end
+function M.AST.Do:toRQuote(ctxt)
+  if self.spmd then
+    return rquote
+      __demand(__spmd)
+      do
+        [self.body:toRQuote(ctxt)]
+      end
+    end
+  else
+    return rquote
+      do
+        [self.body:toRQuote(ctxt)]
+      end
+    end
+  end
+end
 function M.AST.Print:toRQuote(ctxt)
   local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
   return rquote

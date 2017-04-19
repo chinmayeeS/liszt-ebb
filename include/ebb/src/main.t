@@ -68,6 +68,7 @@ local ADT AST
        | FillField { fld : Field, val : ExprConst }
        | SetGlobal { global : Global, expr : Expr }
        | While { cond : Cond, spmd : boolean, body : Stmt? }
+       | Do { spmd : boolean, body : Stmt? }
        | Print { fmt : string, vals : Expr* }
        | Dump { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Load { rel : Relation, flds : string*, file : string, vals : Expr* }
@@ -205,6 +206,13 @@ function M.WHILE(cond, spmd)
   scopes:insert(terralib.newlist())
 end
 
+-- boolean? -> ()
+function M.DO(spmd)
+  spmd = spmd or false
+  stack:insert(AST.Do(spmd, nil))
+  scopes:insert(terralib.newlist())
+end
+
 -- () -> ()
 function M.END()
   assert(#stack > 0)
@@ -218,6 +226,8 @@ function M.END()
       wrapper.thenBlock = AST.Block(stmts)
     end
   elseif AST.While.check(wrapper) then
+    wrapper.body = AST.Block(stmts)
+  elseif AST.Do.check(wrapper) then
     wrapper.body = AST.Block(stmts)
   else assert(false) end
   scopes[#scopes-1]:insert(wrapper)
