@@ -681,6 +681,29 @@ end
 
 -- RG.symbol, RG.symbol, RG.symbol -> RG.rquote
 function R.Relation:emitPrimPartInit(r, p, colors)
+  if self:isFlexible() and self:AutoPartitionField() then
+    local primPartSize = self:primPartSize()
+    return rquote
+      var coloring = RG.c.legion_point_coloring_create()
+      for z = 0, NZ do
+        for y = 0, NY do
+          for x = 0, NX do
+            var rBase : int64
+            for rStart in r do
+              rBase = __raw(rStart).value + (z*NX*NY + y*NX + x) * primPartSize
+              break
+            end
+            RG.c.legion_point_coloring_add_range(
+                coloring, int3d{x,y,z},
+                [RG.c.legion_ptr_t]{value = rBase},
+                [RG.c.legion_ptr_t]{value = rBase + primPartSize - 1})
+          end
+        end
+      end
+      var [p] = partition(disjoint, r, coloring, colors)
+      RG.c.legion_point_coloring_destroy(coloring)
+    end
+  end
   return rquote
     var [p] = partition(equal, r, colors)
   end
@@ -728,8 +751,26 @@ function R.Relation:emitQueuePartInit(ctxt, i)
   local colors = ctxt.primColors
   local stencil = self:XferStencil()[i]
   return rquote
-    var [qSrcPart] = partition(equal, q, colors)
-    var coloring = RG.c.legion_point_coloring_create()
+    var srcColoring = RG.c.legion_point_coloring_create()
+    for z = 0, NZ do
+      for y = 0, NY do
+        for x = 0, NX do
+          var qBase : int64
+          for qStart in q do
+            qBase = __raw(qStart).value + (z*NX*NY + y*NX + x) * [self:MaxXferNum()]
+            break
+          end
+          RG.c.legion_point_coloring_add_range(
+              srcColoring, int3d{x,y,z},
+              [RG.c.legion_ptr_t]{value = qBase},
+              [RG.c.legion_ptr_t]{value = qBase + [self:MaxXferNum()] - 1})
+        end
+      end
+    end
+    var [qSrcPart] = partition(disjoint, q, srcColoring, colors)
+    RG.c.legion_point_coloring_destroy(srcColoring)
+
+    var dstColoring = RG.c.legion_point_coloring_create()
     var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
     for c in colors do
       var srcBase : int64
@@ -738,12 +779,12 @@ function R.Relation:emitQueuePartInit(ctxt, i)
         break
       end
       RG.c.legion_point_coloring_add_range(
-        coloring, c,
+        dstColoring, c,
         [RG.c.legion_ptr_t]{value = srcBase},
         [RG.c.legion_ptr_t]{value = srcBase + [self:MaxXferNum()] - 1})
     end
-    var [qDstPart] = partition(disjoint, q, coloring, colors)
-    RG.c.legion_point_coloring_destroy(coloring)
+    var [qDstPart] = partition(disjoint, q, dstColoring, colors)
+    RG.c.legion_point_coloring_destroy(dstColoring)
   end
 end
 
