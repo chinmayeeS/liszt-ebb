@@ -70,7 +70,7 @@ T.istype = istype
 
 -- Primitives
 local terraprimitive_to_ebb = {}
-local primitives = {"int","uint", "uint64","bool","float","double"}
+local primitives = {"int","int64","uint", "uint64","bool","float","double"}
 for i=1,#primitives do
   local p         = primitives[i]
   local t         = NewType("primitive")
