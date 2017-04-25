@@ -62,6 +62,7 @@ local ADT AST
        | NewGlobal { global : Global, init : ExprConst }
        | NewRelation { rel : Relation }
        | NewDivision { subsets : Subset* }
+       | ImportModule { mod : Module }
   Stmt = Block { stmts : Stmt* }
        | ForEach { fun : Function, rel : Relation, subset : Subset? }
        | If { cond : Cond, thenBlock : Stmt?, elseBlock : Stmt? }
@@ -71,6 +72,7 @@ local ADT AST
        | Print { fmt : string, vals : Expr* }
        | Dump { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Load { rel : Relation, flds : string*, file : string, vals : Expr* }
+       | ExternCall { mod : Module, taskName : string, args : RelOrSSet* }
   Cond = Literal { val : boolean }
        | And { lhs : Cond, rhs : Cond }
        | Or { lhs : Cond, rhs : Cond }
@@ -80,12 +82,14 @@ local ADT AST
        | GetGlobal { global : Global }
        | BinaryOp { op : string, lhs : Expr, rhs : Expr }
        | UnaryOp { op : string, arg : Expr }
+  Module = { fname : string, args : Relation* }
   extern ExprConst isExprConst
   extern Field     isField
   extern Function  isFunction
   extern Global    isGlobal
   extern Relation  isRelation
   extern Subset    isSubset
+  extern RelOrSSet function(x) return isRelation(x) or isSubset(x) end
 end
 M.AST = AST
 
@@ -180,6 +184,10 @@ function M.LT(lhs, rhs) return implCompare('<',  lhs, rhs) end
 function M.GE(lhs, rhs) return implCompare('>=', lhs, rhs) end
 function M.LE(lhs, rhs) return implCompare('<=', lhs, rhs) end
 
+-------------------------------------------------------------------------------
+-- Control flow
+-------------------------------------------------------------------------------
+
 -- boolean | AST.Cond -> ()
 function M.IF(cond)
   if type(cond) == 'boolean' then cond = AST.Literal(cond) end
@@ -225,10 +233,26 @@ function M.END()
   stack[#stack] = nil
 end
 
+-------------------------------------------------------------------------------
+-- Misc commands
+-------------------------------------------------------------------------------
+
 -- string, (ExprConst | AST.Expr)* -> ()
 function M.PRINT(fmt, ...)
   local args = terralib.newlist({...}):map(function(x)
     return isExprConst(x) and AST.Const(x) or x
   end)
   M.stmts():insert(AST.Print(fmt, args))
+end
+
+-- string, Relation, ..., Relation -> ()
+function M.IMPORT(fname, ...)
+  local mod = AST.Module(fname, terralib.newlist({...}))
+  M.decls():insert(AST.ImportModule(mod))
+  local proxy = setmetatable({}, {__index = function(self, taskName)
+    return function(...)
+      M.stmts():insert(AST.ExternCall(mod, taskName, terralib.newlist({...})))
+    end
+  end})
+  return proxy
 end

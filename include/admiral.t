@@ -2042,6 +2042,15 @@ function M.AST.Load:toRQuote(ctxt)
     [primPartQuote]
   end
 end
+function M.AST.ExternCall:toRQuote(ctxt)
+  local tsk = ctxt.modTasks[self.mod][self.taskName]
+  local args = newlist() -- RG.symbol*
+  args:insertall(self.args:map(function(a)
+    return L.is_subset(a) and ctxt.subsetMap[a] or ctxt.relMap[a]
+  end))
+  args:insertall(ctxt.modSymbols[self.mod])
+  return rquote tsk([args]) end
+end
 
 -- ProgramContext -> RG.rexpr
 function M.AST.Cond:toRExpr(ctxt)
@@ -2172,10 +2181,13 @@ function A.translateAndRun(mapper_registration, link_flags)
     qSrcParts  = {},  -- map(R.Relation, RG.symbol*)
     qDstParts  = {},  -- map(R.Relation, RG.symbol*)
     primColors = nil, -- RG.symbol
+    modSymbols = {},  -- map(M.AST.Module, RG.symbol*)
+    modTasks   = {},  -- map(M.AST.Module, map(string, RG.task))
   }
   -- Collect declarations
   local globalInits = {} -- map(L.Global, M.ExprConst)
   local rels = newlist() -- R.Relation*
+  local modules = newlist() -- AST.Module
   for _,decl in ipairs(M.decls()) do
     if M.AST.NewField.check(decl) then
       -- Do nothing
@@ -2187,7 +2199,20 @@ function A.translateAndRun(mapper_registration, link_flags)
       rels:insert(decl.rel)
     elseif M.AST.NewDivision.check(decl) then
       -- Do nothing
+    elseif M.AST.ImportModule.check(decl) then
+      modules:insert(decl.mod)
     else assert(false) end
+  end
+  -- Emit module loads
+  for _,mod in ipairs(modules) do
+    local fspaces = mod.args:map(function(rel) return rel:fieldSpace() end)
+    local symbols, inits, tasks = (require (mod.fname))(unpack(fspaces))
+    ctxt.modSymbols[mod] = symbols
+    ctxt.modTasks[mod] = tasks
+    for _,sym in ipairs(symbols) do
+      header:insert(rquote var [sym] end)
+    end
+    header:insert(inits)
   end
   -- Emit global declarations
   for g,val in pairs(globalInits) do
