@@ -57,31 +57,6 @@ local function copy_table(tbl)
   return cpy
 end
 
-local function memoize_call(f)
-  local cache = {}
-  local function penultimate(subcache, ...)
-    if select('#',...) == 1 then
-      return subcache
-    else
-      local k = select(1,...)
-      local lookup = subcache[k]
-      if not lookup then lookup = {}; subcache[k] = lookup end
-      return penultimate(lookup, select(2,...))
-    end
-  end
-  local function lastkey(...) return select(select('#',...), ...) end
-  return function(...)
-    local subcache  = penultimate(cache,...)
-    local k         = lastkey(...)
-    local val       = subcache[k]
-    if not val then
-      val = f(...)
-      subcache[k] = val
-    end
-    return val
-  end
-end
-
 local function is_num(obj) return type(obj) == 'number' end
 local function is_bool(obj) return type(obj) == 'boolean' end
 

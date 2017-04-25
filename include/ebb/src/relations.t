@@ -562,23 +562,6 @@ function Field:AutoPartitionByPreimage()
 end
 
 -------------------------------------------------------------------------------
---[[  Error Checking subroutines                                           ]]--
-
--- modular error checking
-local function ferrprefix(level)
-  local blob = debug.getinfo(level)
-  local name = type(blob.name) == 'string' and blob.name..': ' or ''
-  return name
-end
-local function argcheck_loadval_type(obj,typ,lvl)
-  if not T.luaValConformsToType(obj,typ) then
-    lvl = (lvl or 1) + 1
-    error(ferrprefix(lvl).."lua value does not conform to type "..
-                           tostring(typ), lvl)
-  end
-end
-
--------------------------------------------------------------------------------
 --[[  High-Level Loading and Dumping Operations (Lua and Terra)            ]]--
 
 function Field:Fill(val)
