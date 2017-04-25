@@ -783,7 +783,7 @@ function R.Relation:emitQueuePartInit(ctxt, i)
         [RG.c.legion_ptr_t]{value = srcBase},
         [RG.c.legion_ptr_t]{value = srcBase + [self:MaxXferNum()] - 1})
     end
-    var [qDstPart] = partition(disjoint, q, dstColoring, colors)
+    var [qDstPart] = partition(aliased, q, dstColoring, colors)
     RG.c.legion_point_coloring_destroy(dstColoring)
   end
 end
