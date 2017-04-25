@@ -62,7 +62,7 @@ local ADT AST
        | NewGlobal { global : Global, init : ExprConst }
        | NewRelation { rel : Relation }
        | NewDivision { subsets : Subset* }
-       | ImportModule { mod : Module }
+       | Import { mod : Module }
   Stmt = Block { stmts : Stmt* }
        | ForEach { fun : Function, rel : Relation, subset : Subset? }
        | If { cond : Cond, thenBlock : Stmt?, elseBlock : Stmt? }
@@ -72,7 +72,7 @@ local ADT AST
        | Print { fmt : string, vals : Expr* }
        | Dump { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Load { rel : Relation, flds : string*, file : string, vals : Expr* }
-       | ExternCall { mod : Module, taskName : string, args : RelOrSSet* }
+       | Inline { export : Export }
   Cond = Literal { val : boolean }
        | And { lhs : Cond, rhs : Cond }
        | Or { lhs : Cond, rhs : Cond }
@@ -83,13 +83,13 @@ local ADT AST
        | BinaryOp { op : string, lhs : Expr, rhs : Expr }
        | UnaryOp { op : string, arg : Expr }
   Module = { fname : string, args : Relation* }
+  Export = { mod : Module, name : string }
   extern ExprConst isExprConst
   extern Field     isField
   extern Function  isFunction
   extern Global    isGlobal
   extern Relation  isRelation
   extern Subset    isSubset
-  extern RelOrSSet function(x) return isRelation(x) or isSubset(x) end
 end
 M.AST = AST
 
@@ -248,11 +248,14 @@ end
 -- string, Relation, ..., Relation -> ()
 function M.IMPORT(fname, ...)
   local mod = AST.Module(fname, terralib.newlist({...}))
-  M.decls():insert(AST.ImportModule(mod))
-  local proxy = setmetatable({}, {__index = function(self, taskName)
-    return function(...)
-      M.stmts():insert(AST.ExternCall(mod, taskName, terralib.newlist({...})))
-    end
+  M.decls():insert(AST.Import(mod))
+  local proxy = setmetatable({}, {__index = function(self, name)
+    return AST.Export(mod, name)
   end})
   return proxy
+end
+
+-- AST.Export -> ()
+function M.INLINE(exp)
+  M.stmts():insert(AST.Inline(exp))
 end

@@ -2042,14 +2042,8 @@ function M.AST.Load:toRQuote(ctxt)
     [primPartQuote]
   end
 end
-function M.AST.ExternCall:toRQuote(ctxt)
-  local tsk = ctxt.modTasks[self.mod][self.taskName]
-  local args = newlist() -- RG.symbol*
-  args:insertall(self.args:map(function(a)
-    return L.is_subset(a) and ctxt.subsetMap[a] or ctxt.relMap[a]
-  end))
-  args:insertall(ctxt.modSymbols[self.mod])
-  return rquote tsk([args]) end
+function M.AST.Inline:toRQuote(ctxt)
+  return ctxt.modExports[self.export.mod][self.export.name]
 end
 
 -- ProgramContext -> RG.rexpr
@@ -2181,8 +2175,7 @@ function A.translateAndRun(mapper_registration, link_flags)
     qSrcParts  = {},  -- map(R.Relation, RG.symbol*)
     qDstParts  = {},  -- map(R.Relation, RG.symbol*)
     primColors = nil, -- RG.symbol
-    modSymbols = {},  -- map(M.AST.Module, RG.symbol*)
-    modTasks   = {},  -- map(M.AST.Module, map(string, RG.task))
+    modExports = {},  -- map(M.AST.Module, map(string,RG.rquote))
   }
   -- Collect declarations
   local globalInits = {} -- map(L.Global, M.ExprConst)
@@ -2199,20 +2192,9 @@ function A.translateAndRun(mapper_registration, link_flags)
       rels:insert(decl.rel)
     elseif M.AST.NewDivision.check(decl) then
       -- Do nothing
-    elseif M.AST.ImportModule.check(decl) then
+    elseif M.AST.Import.check(decl) then
       modules:insert(decl.mod)
     else assert(false) end
-  end
-  -- Emit module loads
-  for _,mod in ipairs(modules) do
-    local fspaces = mod.args:map(function(rel) return rel:fieldSpace() end)
-    local symbols, inits, tasks = (require (mod.fname))(unpack(fspaces))
-    ctxt.modSymbols[mod] = symbols
-    ctxt.modTasks[mod] = tasks
-    for _,sym in ipairs(symbols) do
-      header:insert(rquote var [sym] end)
-    end
-    header:insert(inits)
   end
   -- Emit global declarations
   for g,val in pairs(globalInits) do
@@ -2308,6 +2290,15 @@ function A.translateAndRun(mapper_registration, link_flags)
     end
   end
   body:insertall(emitFillTaskCalls(ctxt, fillStmts))
+  -- Emit module loads
+  for _,mod in ipairs(modules) do
+    local modParams = newlist()
+    for _,rel in ipairs(mod.args) do
+      modParams:insert(ctxt.relMap[rel])
+      modParams:insert(rel:regionType())
+    end
+    ctxt.modExports[mod] = (require (mod.fname))(unpack(modParams))
+  end
   -- Process other statements
   for _,s in ipairs(M.stmts()) do
     if not M.AST.FillField.check(s) then
