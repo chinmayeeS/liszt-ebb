@@ -1153,7 +1153,11 @@ function AST.UserFunction:toTask(info)
       local rel = ctxt.relMap[info.domainRel]
       block = rquote if [rel][loopVar].__valid then [block] end end
     end
-    block = rquote for [loopVar] in [ctxt.domainSym] do [block] end end
+    if not ctxt.reducedGlobal and not info.domainRel:isFlexible() and RG.config['openmp'] then
+      block = rquote __demand(__openmp) for [loopVar] in [ctxt.domainSym] do [block] end end
+    else
+      block = rquote for [loopVar] in [ctxt.domainSym] do [block] end end
+    end
   end
   body:insert(block)
   if ctxt.reducedGlobal then
@@ -2194,24 +2198,32 @@ local function emitFillTaskCalls(ctxt, fillStmts)
     local privileges = newlist()
     privileges:insert(RG.privilege(RG.reads, arg))
     privileges:insert(RG.privilege(RG.writes, arg))
+    local body
+    if not rel:isFlexible() and RG.config['openmp'] then
+      body = fills:map(function(fill) return rquote
+        __demand(__openmp)
+        for e in arg do
+          e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
+        end
+      end end)
+    else
+      body = fills:map(function(fill) return rquote
+        for e in arg do
+          e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
+        end
+      end end)
+    end
+
     local tsk
     if RG.check_cuda_available() then
       __demand(__parallel, __cuda)
       task tsk([arg]) where [privileges] do
-        [fills:map(function(fill) return rquote
-           for e in arg do
-             e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
-           end
-         end end)]
+        [body]
       end
     else
       __demand(__parallel)
       task tsk([arg]) where [privileges] do
-        [fills:map(function(fill) return rquote
-           for e in arg do
-             e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
-           end
-         end end)]
+        [body]
       end
     end
     fillTasks[rel] = tsk
