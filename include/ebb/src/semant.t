@@ -41,6 +41,7 @@ local errorT    = T.error
 local floatT    = T.float
 local doubleT   = T.double
 local intT      = T.int
+local int64T    = T.int64
 local uint64T   = T.uint64
 local boolT     = T.bool
 
@@ -368,6 +369,14 @@ local reductions_by_type = {
     ['max'] = true,
   },
   [intT] = {
+    ['min'] = true,
+    ['max'] = true,
+    ['+']   = true,
+    ['-']   = true,
+    ['*']   = true,
+    --['/']   = true,
+  },
+  [int64T] = {
     ['min'] = true,
     ['max'] = true,
     ['+']   = true,
@@ -1008,6 +1017,8 @@ function ast.Number:check(ctxt)
   elseif self.valuetype then
     if     self.valuetype == int then
         number.node_type = intT
+    elseif self.valuetype == int64 then
+        number.node_type = int64T
     elseif self.valuetype == double then
         number.node_type = doubleT
     elseif self.valuetype == float then

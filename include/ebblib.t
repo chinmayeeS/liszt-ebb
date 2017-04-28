@@ -30,6 +30,7 @@ package.loaded["ebblib"] = L
 local T = require 'ebb.src.types'
 
 L.int           = T.int
+L.int64         = T.int64
 L.uint          = T.uint
 L.uint64        = T.uint64
 L.bool          = T.bool

@@ -586,6 +586,27 @@ function R.Relation:regionType()
   return region(self:indexSpaceType(), self:fieldSpace())
 end
 
+-- () -> terralib.array
+R.Relation.queueFieldSpace = terralib.memoize(function(self)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  return int8[terralib.sizeof(self:fieldSpace())]
+end)
+
+-- () -> RG.region_type
+function R.Relation:queueRegionType()
+  -- Region types in signatures must be distinct, so we're not caching here.
+  return region(self:indexSpaceType(), self:queueFieldSpace())
+end
+
+R.Relation.validFieldOffset = terralib.memoize(function(self)
+  -- Ask Terra the offset to the __valid field
+  local terra get_offset()
+    var x : self:fieldSpace()
+    return [int64]([&int8](&(x.__valid)) - [&int8](&x))
+  end
+  return get_offset()
+end)
+
 -- M.ExprConst -> RG.rexpr
 function R.Relation:translateIndex(lit)
   local dims = self:Dims()
@@ -641,7 +662,11 @@ function R.Relation:emitRegionInit(rg)
   local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
   local allocQuote = rquote end
   if not self:isGrid() then
-    allocQuote = rquote new(ptr(fspaceExpr, rg), [self:Dims()[1]]) end
+    local size = self:Dims()[1]
+    if RG.config['parallelize'] then
+      size = self:primPartSize() * NUM_PRIM_PARTS
+    end
+    allocQuote = rquote new(ptr(fspaceExpr, rg), [size]) end
   end
   local fillQuote = rquote end
   if self:isFlexible() then
@@ -660,18 +685,18 @@ function R.Relation:emitPrimPartInit(r, p, colors)
     local primPartSize = self:primPartSize()
     return rquote
       var coloring = RG.c.legion_point_coloring_create()
-      for x = 0, NX do
+      for z = 0, NZ do
         for y = 0, NY do
-          for z = 0, NZ do
+          for x = 0, NX do
             var rBase : int64
             for rStart in r do
-              rBase = __raw(rStart).value + (x*NY*NZ + y*NZ + z) * primPartSize
+              rBase = __raw(rStart).value + (z*NX*NY + y*NX + x) * primPartSize
               break
             end
             RG.c.legion_point_coloring_add_range(
-              coloring, int3d{x,y,z},
-              [RG.c.legion_ptr_t]{value = rBase},
-              [RG.c.legion_ptr_t]{value = rBase + primPartSize - 1})
+                coloring, int3d{x,y,z},
+                [RG.c.legion_ptr_t]{value = rBase},
+                [RG.c.legion_ptr_t]{value = rBase + primPartSize - 1})
           end
         end
       end
@@ -710,11 +735,10 @@ end)
 function R.Relation:emitQueueInit(q)
   assert(self:isFlexible() and self:AutoPartitionField())
   local size = self:MaxXferNum() * NUM_PRIM_PARTS
-  local fspaceExpr = self:fieldSpace()
+  local fspaceExpr = self:queueFieldSpace()
   return rquote
     var [q] = region(ispace(ptr, size), fspaceExpr)
     new(ptr(fspaceExpr, q), size)
-    fill(q.__valid, false)
   end
 end
 
@@ -727,8 +751,26 @@ function R.Relation:emitQueuePartInit(ctxt, i)
   local colors = ctxt.primColors
   local stencil = self:XferStencil()[i]
   return rquote
-    var [qSrcPart] = partition(equal, q, colors)
-    var coloring = RG.c.legion_point_coloring_create()
+    var srcColoring = RG.c.legion_point_coloring_create()
+    for z = 0, NZ do
+      for y = 0, NY do
+        for x = 0, NX do
+          var qBase : int64
+          for qStart in q do
+            qBase = __raw(qStart).value + (z*NX*NY + y*NX + x) * [self:MaxXferNum()]
+            break
+          end
+          RG.c.legion_point_coloring_add_range(
+              srcColoring, int3d{x,y,z},
+              [RG.c.legion_ptr_t]{value = qBase},
+              [RG.c.legion_ptr_t]{value = qBase + [self:MaxXferNum()] - 1})
+        end
+      end
+    end
+    var [qSrcPart] = partition(disjoint, q, srcColoring, colors)
+    RG.c.legion_point_coloring_destroy(srcColoring)
+
+    var dstColoring = RG.c.legion_point_coloring_create()
     var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
     for c in colors do
       var srcBase : int64
@@ -737,37 +779,14 @@ function R.Relation:emitQueuePartInit(ctxt, i)
         break
       end
       RG.c.legion_point_coloring_add_range(
-        coloring, c,
+        dstColoring, c,
         [RG.c.legion_ptr_t]{value = srcBase},
         [RG.c.legion_ptr_t]{value = srcBase + [self:MaxXferNum()] - 1})
     end
-    var [qDstPart] = partition(disjoint, q, coloring, colors)
-    RG.c.legion_point_coloring_destroy(coloring)
+    var [qDstPart] = partition(aliased, q, dstColoring, colors)
+    RG.c.legion_point_coloring_destroy(dstColoring)
   end
 end
-
--- () -> RG.task
-R.Relation.emitPush = terralib.memoize(function(self)
-  assert(self:isFlexible() and self:AutoPartitionField())
-  local push __demand(__inline) task push
-    (r    : self:regionType(),
-     rPtr : ptr(self:fieldSpace(), r),
-     q    : self:regionType())
-  where
-    reads(r), writes(r.__valid), reads writes(q)
-  do
-    for qPtr in q do
-      if not qPtr.__valid then
-        q[qPtr] = r[rPtr]
-        rPtr.__valid = false
-        break
-      end
-    end
-    RG.assert(not rPtr.__valid, 'Transfer queue ran out of space')
-  end
-  registerTask(push, self:Name()..'_push')
-  return push
-end)
 
 -- () -> RG.task
 R.Relation.emitPushAll = terralib.memoize(function(self)
@@ -775,7 +794,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   assert(self:isFlexible() and autoPartFld)
   -- utilized sub-tasks
   local rngElemColor = autoPartFld:Type().relation:emitElemColor()
-  local push = self:emitPush()
+  --local push = self:emitPush()
   -- code elements to fill in
   local qs = newlist() -- RG.symbol*
   local privileges = newlist() -- RG.privilege*
@@ -787,20 +806,49 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   local partColor = RG.newsymbol(int3d, 'partColor')
   local elemColor = RG.newsymbol(int3d, 'elemColor')
   -- fill in parameters & movement cases
+  local terra push_element(dst : &opaque,
+                           idx : int,
+                           src : self:regionType().fspace_type)
+    var ptr : &int8 = [&int8](dst) + idx * [self:queueFieldSpace().N]
+    C.memcpy(ptr, &src, [self:queueFieldSpace().N])
+  end
   for i,stencil in ipairs(self:XferStencil()) do
-    local q = RG.newsymbol(self:regionType(), 'q'..(i-1))
+    local q = RG.newsymbol(self:queueRegionType(), 'q'..(i-1))
+    local qBasePtr = RG.newsymbol(&opaque, 'qBasePtr'..(i-1))
     qs:insert(q)
     privileges:insert(RG.privilege(RG.reads, q))
     privileges:insert(RG.privilege(RG.writes, q))
     queueInits:insert(rquote
-      for qPtr in q do
-        qPtr.__valid = false
+      for qPtr in [q] do
+        [q][qPtr][ [self:validFieldOffset()] ] = [int8](false)
+      end
+      var [qBasePtr]
+      do
+        var acc =
+          RG.c.legion_physical_region_get_field_accessor_array(__physical([q])[0], __fields([q])[0])
+        for qPtr in [q] do
+          [qBasePtr] = RG.c.legion_accessor_array_ref(acc, __raw(qPtr))
+          break
+        end
+        RG.c.legion_accessor_array_destroy(acc)
       end
     end)
     moveChecks:insert(rquote
-      var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
-      if elemColor == (partColor + colorOff + {NX,NY,NZ}) % {NX,NY,NZ} then
-        push(r, rPtr, q)
+      do
+        var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
+        if rPtr.__valid and elemColor == (partColor + colorOff + {NX,NY,NZ}) % {NX,NY,NZ} then
+          var idx = 0
+          for qPtr in [q] do
+            if not [bool]([q][qPtr][ [self:validFieldOffset()] ]) then
+              push_element(qBasePtr, idx, r[rPtr])
+              rPtr.__valid = false
+              RG.assert([bool]([q][qPtr][ [self:validFieldOffset()] ]), 'Element did not get copied properly')
+              break
+            end
+            idx += 1
+          end
+          RG.assert(not rPtr.__valid, 'Transfer queue ran out of space')
+        end
       end
     end)
   end
@@ -828,20 +876,25 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
   local queues = newlist() -- RG.symbol*
   local privileges = newlist() -- RG.privilege*
   for i = 1,#self:XferStencil() do
-    local q = RG.newsymbol(self:regionType(), 'q'..(i-1))
+    local q = RG.newsymbol(self:queueRegionType(), 'q'..(i-1))
     queues:insert(q)
     privileges:insert(RG.privilege(RG.reads, q))
+  end
+  local terra pull_element(src : &self:queueRegionType().fspace_type.type)
+    var dst : self:regionType().fspace_type
+    C.memcpy(&dst, src, [self:queueRegionType().fspace_type.N])
+    return dst
   end
   local task pullAll(color : int3d, r : self:regionType(), [queues])
   where reads writes(r), [privileges] do
     [queues:map(function(q) return rquote
       for qPtr in q do
         -- TODO: Check that the element is coming to the appropriate partition.
-        if qPtr.__valid then
+        if [bool](q[qPtr][ [self:validFieldOffset()] ]) then
           var copied = false
           for rPtr in r do
             if not rPtr.__valid then
-              r[rPtr] = q[qPtr]
+              r[rPtr] = pull_element(q[qPtr])
               copied = true
               break
             end
@@ -1100,7 +1153,11 @@ function AST.UserFunction:toTask(info)
       local rel = ctxt.relMap[info.domainRel]
       block = rquote if [rel][loopVar].__valid then [block] end end
     end
-    block = rquote for [loopVar] in [ctxt.domainSym] do [block] end end
+    if not ctxt.reducedGlobal and not info.domainRel:isFlexible() and RG.config['openmp'] then
+      block = rquote __demand(__openmp) for [loopVar] in [ctxt.domainSym] do [block] end end
+    else
+      block = rquote for [loopVar] in [ctxt.domainSym] do [block] end end
+    end
   end
   body:insert(block)
   if ctxt.reducedGlobal then
@@ -2003,6 +2060,22 @@ function M.AST.While:toRQuote(ctxt)
     end
   end
 end
+function M.AST.Do:toRQuote(ctxt)
+  if self.spmd then
+    return rquote
+      __demand(__spmd)
+      do
+        [self.body:toRQuote(ctxt)]
+      end
+    end
+  else
+    return rquote
+      do
+        [self.body:toRQuote(ctxt)]
+      end
+    end
+  end
+end
 function M.AST.Print:toRQuote(ctxt)
   local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
   return rquote
@@ -2128,24 +2201,32 @@ local function emitFillTaskCalls(ctxt, fillStmts)
     local privileges = newlist()
     privileges:insert(RG.privilege(RG.reads, arg))
     privileges:insert(RG.privilege(RG.writes, arg))
+    local body
+    if not rel:isFlexible() and RG.config['openmp'] then
+      body = fills:map(function(fill) return rquote
+        __demand(__openmp)
+        for e in arg do
+          e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
+        end
+      end end)
+    else
+      body = fills:map(function(fill) return rquote
+        for e in arg do
+          e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
+        end
+      end end)
+    end
+
     local tsk
     if RG.check_cuda_available() then
       __demand(__parallel, __cuda)
       task tsk([arg]) where [privileges] do
-        [fills:map(function(fill) return rquote
-           for e in arg do
-             e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
-           end
-         end end)]
+        [body]
       end
     else
       __demand(__parallel)
       task tsk([arg]) where [privileges] do
-        [fills:map(function(fill) return rquote
-           for e in arg do
-             e.[fill.fld:Name()] = [toRConst(fill.val, fill.fld:Type())]
-           end
-         end end)]
+        [body]
       end
     end
     fillTasks[rel] = tsk
