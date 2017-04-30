@@ -1153,7 +1153,7 @@ function AST.UserFunction:toTask(info)
       local rel = ctxt.relMap[info.domainRel]
       block = rquote if [rel][loopVar].__valid then [block] end end
     end
-    if not ctxt.reducedGlobal and not info.domainRel:isFlexible() and RG.config['openmp'] then
+    if RG.config['openmp'] then
       block = rquote __demand(__openmp) for [loopVar] in [ctxt.domainSym] do [block] end end
     else
       block = rquote for [loopVar] in [ctxt.domainSym] do [block] end end
