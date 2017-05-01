@@ -1043,14 +1043,14 @@ function FunContext.New(info, argNames, argTypes)
       self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
     end
     if pt.reduceop then
-      if pt.centered then
+      --if pt.centered then
         -- More liberal privileges, but avoids copying.
         self.privileges:insert(RG.privilege(RG.reads, rg, fld:Name()))
         self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
-      else
-        self.privileges:insert(
-          RG.privilege(RG.reduces(pt.reduceop), rg, fld:Name()))
-      end
+      --else
+      --  self.privileges:insert(
+      --    RG.privilege(RG.reduces(pt.reduceop), rg, fld:Name()))
+      --end
     end
   end
   -- Process inserts and deletes
