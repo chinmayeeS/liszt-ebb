@@ -598,13 +598,14 @@ function R.Relation:queueRegionType()
   return region(self:indexSpaceType(), self:queueFieldSpace())
 end
 
+-- () -> number
 R.Relation.validFieldOffset = terralib.memoize(function(self)
   -- Ask Terra the offset to the __valid field
-  local terra get_offset()
+  local terra getOffset()
     var x : self:fieldSpace()
     return [int64]([&int8](&(x.__valid)) - [&int8](&x))
   end
-  return get_offset()
+  return getOffset()
 end)
 
 -- M.ExprConst -> RG.rexpr
@@ -794,7 +795,6 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   assert(self:isFlexible() and autoPartFld)
   -- utilized sub-tasks
   local rngElemColor = autoPartFld:Type().relation:emitElemColor()
-  --local push = self:emitPush()
   -- code elements to fill in
   local qs = newlist() -- RG.symbol*
   local privileges = newlist() -- RG.privilege*
@@ -806,12 +806,13 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   local partColor = RG.newsymbol(int3d, 'partColor')
   local elemColor = RG.newsymbol(int3d, 'elemColor')
   -- fill in parameters & movement cases
-  local terra push_element(dst : &opaque,
-                           idx : int,
-                           src : self:regionType().fspace_type)
+  local terra pushElement(dst : &opaque,
+                          idx : int,
+                          src : self:regionType().fspace_type)
     var ptr : &int8 = [&int8](dst) + idx * [self:queueFieldSpace().N]
     C.memcpy(ptr, &src, [self:queueFieldSpace().N])
   end
+  registerFun(pushElement, self:Name()..'_pushElement')
   for i,stencil in ipairs(self:XferStencil()) do
     local q = RG.newsymbol(self:queueRegionType(), 'q'..(i-1))
     local qBasePtr = RG.newsymbol(&opaque, 'qBasePtr'..(i-1))
@@ -836,11 +837,11 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     moveChecks:insert(rquote
       do
         var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
-        if rPtr.__valid and elemColor == (partColor + colorOff + {NX,NY,NZ}) % {NX,NY,NZ} then
+        if elemColor == (partColor + colorOff + {NX,NY,NZ}) % {NX,NY,NZ} then
           var idx = 0
           for qPtr in [q] do
             if not [bool]([q][qPtr][ [self:validFieldOffset()] ]) then
-              push_element(qBasePtr, idx, r[rPtr])
+              pushElement(qBasePtr, idx, r[rPtr])
               rPtr.__valid = false
               RG.assert([bool]([q][qPtr][ [self:validFieldOffset()] ]), 'Element did not get copied properly')
               break
@@ -880,11 +881,12 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
     queues:insert(q)
     privileges:insert(RG.privilege(RG.reads, q))
   end
-  local terra pull_element(src : &self:queueRegionType().fspace_type.type)
+  local terra pullElement(src : &self:queueRegionType().fspace_type.type)
     var dst : self:regionType().fspace_type
     C.memcpy(&dst, src, [self:queueRegionType().fspace_type.N])
     return dst
   end
+  registerFun(pullElement, self:Name()..'_pullElement')
   local task pullAll(color : int3d, r : self:regionType(), [queues])
   where reads writes(r), [privileges] do
     [queues:map(function(q) return rquote
@@ -894,7 +896,7 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
           var copied = false
           for rPtr in r do
             if not rPtr.__valid then
-              r[rPtr] = pull_element(q[qPtr])
+              r[rPtr] = pullElement(q[qPtr])
               copied = true
               break
             end
@@ -1043,14 +1045,8 @@ function FunContext.New(info, argNames, argTypes)
       self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
     end
     if pt.reduceop then
-      --if pt.centered then
-        -- More liberal privileges, but avoids copying.
-        self.privileges:insert(RG.privilege(RG.reads, rg, fld:Name()))
-        self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
-      --else
-      --  self.privileges:insert(
-      --    RG.privilege(RG.reduces(pt.reduceop), rg, fld:Name()))
-      --end
+      self.privileges:insert(RG.privilege(RG.reads, rg, fld:Name()))
+      self.privileges:insert(RG.privilege(RG.writes, rg, fld:Name()))
     end
   end
   -- Process inserts and deletes
