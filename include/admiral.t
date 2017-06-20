@@ -33,6 +33,7 @@ local F   = require 'ebb.src.functions'
 local L   = require 'ebblib'
 local M   = require 'ebb.src.main'
 local P   = require 'ebb.src.phase'
+local PRE = require 'ebb.src.prelude'
 local R   = require 'ebb.src.relations'
 local RG  = regentlib
 local S   = require 'ebb.src.semant'
@@ -1027,7 +1028,7 @@ end
 --   name           : string
 --   domainRel      : R.Relation?
 --   field_use      : map(R.Field, P.PhaseType)
---   global_use     : map(L.Global, P.PhaseType)
+--   global_use     : map(PRE.Global, P.PhaseType)
 --   inserts        : map(R.Relation, AST.InsertStatement)
 --   deletes        : map(R.Relation, AST.DeleteStatement)
 -- }
@@ -1040,18 +1041,18 @@ function FunContext.New(info, argNames, argTypes)
   local self = setmetatable({
     -- Symbol mappings
     localMap        = {},        -- map(AST.Symbol, RG.rexpr)
-    globalMap       = {},        -- map(L.Global, RG.symbol)
+    globalMap       = {},        -- map(PRE.Global, RG.symbol)
     relMap          = {},        -- map(R.Relation, RG.symbol)
     -- Signature information
     domainSym       = nil,       -- RG.Symbol?
     domainRel       = nil,       -- R.Relation?
     args            = newlist(), -- RG.Symbol*
     accessedRels    = newlist(), -- R.Relation*
-    readGlobals     = newlist(), -- L.Global*
+    readGlobals     = newlist(), -- PRE.Global*
     -- Field use information
     privileges      = newlist(), -- RG.privilege*
     -- Global reduction information
-    reducedGlobal   = nil,       -- L.Global?
+    reducedGlobal   = nil,       -- PRE.Global?
     globalReduceAcc = nil,       -- RG.symbol?
     globalReduceOp  = nil,       -- string?
   }, FunContext)
@@ -1268,7 +1269,7 @@ function F.Function:toKernelTask()
   --   ...
   --   typed_ast      : AST.UserFunction
   --   field_use      : map(R.Field, P.PhaseType)
-  --   global_use     : map(L.Global, P.PhaseType)
+  --   global_use     : map(PRE.Global, P.PhaseType)
   --   inserts        : map(R.Relation, AST.InsertStatement)
   --   deletes        : map(R.Relation, AST.DeleteStatement)
   -- }
@@ -1293,7 +1294,7 @@ function F.Function:toHelperTask(argTypes)
   -- info : {
   --   ...
   --   field_use      : map(R.Field, P.PhaseType)
-  --   global_use     : map(L.Global, P.PhaseType)
+  --   global_use     : map(PRE.Global, P.PhaseType)
   --   inserts        : map(R.Relation, AST.InsertStatement)
   --   deletes        : map(R.Relation, AST.DeleteStatement)
   -- }
@@ -1592,14 +1593,14 @@ function AST.FieldAccessIndex:toRExpr(ctxt)
   return emitIndexExpr(self.base:toRExpr(ctxt), self.index)
 end
 function AST.Global:toRExpr(ctxt)
-  -- self.global : L.Global
+  -- self.global : PRE.Global
   return rexpr
     [ctxt.globalMap[self.global]]
   end
 end
 function AST.GlobalIndex:toRExpr(ctxt)
   -- self.index  : AST.Expression
-  -- self.global : L.Global
+  -- self.global : PRE.Global
   return emitIndexExpr(ctxt.globalMap[self.global], self.index)
 end
 function AST.LetExpr:toRExpr(ctxt)
@@ -2293,7 +2294,7 @@ local function emitFillTaskCalls(fillStmts)
 end
 
 -- () -> RG.symbol()
-L.Global.varSymbol = terralib.memoize(function(self)
+PRE.Global.varSymbol = terralib.memoize(function(self)
   return RG.newsymbol(toRType(self:Type()), idSanitize(self:Name()))
 end)
 
@@ -2308,7 +2309,7 @@ function A.translateAndRun(mapper_registration, link_flags)
   local header = newlist() -- RG.rquote*
   local body = newlist() -- RG.rquote*
   -- Collect declarations
-  local globalInits = {} -- map(L.Global, M.ExprConst)
+  local globalInits = {} -- map(PRE.Global, M.ExprConst)
   local rels = newlist() -- R.Relation*
   for _,decl in ipairs(M.decls()) do
     if M.AST.NewField.check(decl) then

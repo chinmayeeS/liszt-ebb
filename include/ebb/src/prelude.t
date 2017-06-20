@@ -1,23 +1,23 @@
 -- The MIT License (MIT)
--- 
+--
 -- Copyright (c) 2015 Stanford University.
 -- All rights reserved.
--- 
+--
 -- Permission is hereby granted, free of charge, to any person obtaining a
 -- copy of this software and associated documentation files (the "Software"),
 -- to deal in the Software without restriction, including without limitation
 -- the rights to use, copy, modify, merge, publish, distribute, sublicense,
 -- and/or sell copies of the Software, and to permit persons to whom the
 -- Software is furnished to do so, subject to the following conditions:
--- 
+--
 -- The above copyright notice and this permission notice shall be included
 -- in all copies or substantial portions of the Software.
--- 
+--
 -- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 -- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 -- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 -- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
--- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
+-- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 -- FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 -- DEALINGS IN THE SOFTWARE.
 
@@ -41,16 +41,19 @@ local M = require "ebb.src.main"
 
 local Global      = {}
 Global.__index    = Global
+Pre.Global        = Global
 local function is_global(obj) return getmetatable(obj) == Global end
 Pre.is_global     = is_global
 
 local Constant    = {}
 Constant.__index  = Constant
+Pre.Constant      = Constant
 local function is_constant(obj) return getmetatable(obj) == Constant end
 Pre.is_constant   = is_constant
 
 local Macro       = {}
 Macro.__index     = Macro
+Pre.Macro         = Macro
 local function is_macro(obj) return getmetatable(obj) == Macro end
 Pre.is_macro      = is_macro
 
@@ -63,7 +66,7 @@ local T   = require 'ebb.src.types'
 --[[ Globals:                                                              ]]--
 -------------------------------------------------------------------------------
 
-function Pre.Global (name, typ, init)
+function Pre.NewGlobal (name, typ, init)
   if not T.istype(typ) or not typ:isvalue() then
     error("Second argument to Global() must be an Ebb value type", 2)
   end
@@ -118,7 +121,7 @@ local function deep_copy(tbl)
     end
 end
 
-function Pre.Constant (typ, init)
+function Pre.NewConstant (typ, init)
     if not T.istype(typ) or not typ:isvalue() then
         error("First argument to Constant() must be an "..
               "Ebb value type", 2)
@@ -148,8 +151,9 @@ end
 -------------------------------------------------------------------------------
 --[[ LMacros:                                                              ]]--
 -------------------------------------------------------------------------------
-function Pre.Macro(generator)
-    return setmetatable({genfunc=generator}, Macro)    
+
+function Pre.NewMacro(generator)
+    return setmetatable({genfunc=generator}, Macro)
 end
 
 function Macro:__newindex(fieldname,value)

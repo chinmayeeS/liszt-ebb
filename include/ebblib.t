@@ -1,23 +1,23 @@
 -- The MIT License (MIT)
--- 
+--
 -- Copyright (c) 2015 Stanford University.
 -- All rights reserved.
--- 
+--
 -- Permission is hereby granted, free of charge, to any person obtaining a
 -- copy of this software and associated documentation files (the "Software"),
 -- to deal in the Software without restriction, including without limitation
 -- the rights to use, copy, modify, merge, publish, distribute, sublicense,
 -- and/or sell copies of the Software, and to permit persons to whom the
 -- Software is furnished to do so, subject to the following conditions:
--- 
+--
 -- The above copyright notice and this permission notice shall be included
 -- in all copies or substantial portions of the Software.
--- 
+--
 -- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 -- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 -- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 -- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
--- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
+-- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 -- FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 -- DEALINGS IN THE SOFTWARE.
 local L = {}
@@ -37,8 +37,8 @@ L.bool          = T.bool
 L.float         = T.float
 L.double        = T.double
 
-L.vector        = T.vector 
-L.matrix        = T.matrix 
+L.vector        = T.vector
+L.matrix        = T.matrix
 L.key           = T.key
 
 for _,tchar in ipairs({ 'i', 'f', 'd', 'b' }) do
@@ -102,9 +102,9 @@ L.tan             = B.tan
 -------------------------------------------------------------------------------
 
 local Pre     = require "ebb.src.prelude"
-L.Global          = Pre.Global
-L.Constant        = Pre.Constant
-L.Macro           = Pre.Macro
+L.Global          = Pre.NewGlobal
+L.Constant        = Pre.NewConstant
+L.Macro           = Pre.NewMacro
 L.CPU             = Pre.CPU
 L.GPU             = Pre.GPU
 L.SetDefaultProcessor = Pre.SetDefaultProcessor
@@ -131,5 +131,3 @@ L.is_global       = Pre.is_global
 L.is_constant     = Pre.is_constant
 L.is_macro        = Pre.is_macro
 L.is_type         = T.istype
-
-
