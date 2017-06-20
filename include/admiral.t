@@ -77,7 +77,8 @@ if USE_HDF then
   end
 end
 
-local function primPartDims()
+-- () -> int,int,int
+function A.primPartDims()
   local dop = RG.config['parallelize-dop']
   local NX,NY,NZ = dop:match('^(%d+),(%d+),(%d+)$')
   if NX then
@@ -102,8 +103,13 @@ local function primPartDims()
   end
   return NX,NY,NZ
 end
-local NX,NY,NZ = primPartDims()
+local NX,NY,NZ = A.primPartDims()
 local NUM_PRIM_PARTS = NX * NY * NZ
+
+-- () -> RG.symbol
+A.primColors = terralib.memoize(function()
+  return RG.newsymbol(nil, 'primColors')
+end)
 
 -------------------------------------------------------------------------------
 -- Helper functions
@@ -528,9 +534,48 @@ end
 -- Relation-to-region translation
 -------------------------------------------------------------------------------
 
+-- () -> RG.symbol
+R.Relation.regionSymbol = terralib.memoize(function(self)
+ return RG.newsymbol(nil, self:Name())
+end)
+
+-- () -> RG.symbol
+R.Relation.primPartSymbol = terralib.memoize(function(self)
+  return RG.newsymbol(nil, self:Name()..'_primPart')
+end)
+
+-- () -> RG.symbol*
+R.Relation.queues = terralib.memoize(function(self)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  local queues = newlist()
+  for i = 1,#self:XferStencil() do
+    queues:insert(RG.newsymbol(nil, self:Name()..'_queue_'..(i-1)))
+  end
+  return queues
+end)
+
+-- () -> RG.symbol*
+R.Relation.qSrcParts = terralib.memoize(function(self)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  local qSrcParts = newlist()
+  for i = 1,#self:XferStencil() do
+    qSrcParts:insert(RG.newsymbol(nil, self:Name()..'_qSrcPart_'..(i-1)))
+  end
+  return qSrcParts
+end)
+
+-- () -> RG.symbol*
+R.Relation.qDstParts = terralib.memoize(function(self)
+  assert(self:isFlexible() and self:AutoPartitionField())
+  local qDstParts = newlist()
+  for i = 1,#self:XferStencil() do
+    qDstParts:insert(RG.newsymbol(nil, self:Name()..'_qDstPart_'..(i-1)))
+  end
+  return qDstParts
+end)
+
 -- () -> RG.index_type
 function R.Relation:indexType()
-  if not self:isGrid() then return ptr end
   local dims = self:Dims()
   return
     (not self:isGrid()) and ptr   or
@@ -656,8 +701,9 @@ function R.Relation:emitISpaceInit()
     assert(false)
 end
 
--- RG.symbol -> RG.rquote
-function R.Relation:emitRegionInit(rg)
+-- () -> RG.rquote
+function R.Relation:emitRegionInit()
+  local rg = self:regionSymbol()
   local ispaceExpr = self:emitISpaceInit()
   local fspaceExpr = self:fieldSpace()
   local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
@@ -680,8 +726,10 @@ function R.Relation:emitRegionInit(rg)
   end
 end
 
--- RG.symbol, RG.symbol, RG.symbol -> RG.rquote
-function R.Relation:emitPrimPartInit(r, p, colors)
+-- () -> RG.rquote
+function R.Relation:emitPrimPartInit()
+  local r = self:regionSymbol()
+  local p = self:primPartSymbol()
   if self:isFlexible() and self:AutoPartitionField() then
     local primPartSize = self:primPartSize()
     return rquote
@@ -701,12 +749,12 @@ function R.Relation:emitPrimPartInit(r, p, colors)
           end
         end
       end
-      var [p] = partition(disjoint, r, coloring, colors)
+      var [p] = partition(disjoint, r, coloring, [A.primColors()])
       RG.c.legion_point_coloring_destroy(coloring)
     end
   end
   return rquote
-    var [p] = partition(equal, r, colors)
+    var [p] = partition(equal, r, [A.primColors()])
   end
 end
 
@@ -732,9 +780,10 @@ R.Relation.emitElemColor = terralib.memoize(function(self)
   return elemColor
 end)
 
--- RG.symbol -> RG.rquote
-function R.Relation:emitQueueInit(q)
+-- int -> RG.rquote
+function R.Relation:emitQueueInit(i)
   assert(self:isFlexible() and self:AutoPartitionField())
+  local q = self:queues()[i]
   local size = self:MaxXferNum() * NUM_PRIM_PARTS
   local fspaceExpr = self:queueFieldSpace()
   return rquote
@@ -743,13 +792,13 @@ function R.Relation:emitQueueInit(q)
   end
 end
 
--- ProgramContext, int -> RG.rquote
-function R.Relation:emitQueuePartInit(ctxt, i)
+-- int -> RG.rquote
+function R.Relation:emitQueuePartInit(i)
   assert(self:isFlexible() and self:AutoPartitionField())
-  local q = ctxt.queues[self][i]
-  local qSrcPart = ctxt.qSrcParts[self][i]
-  local qDstPart = ctxt.qDstParts[self][i]
-  local colors = ctxt.primColors
+  local q = self:queues()[i]
+  local qSrcPart = self:qSrcParts()[i]
+  local qDstPart = self:qDstParts()[i]
+  local colors = A.primColors()
   local stencil = self:XferStencil()[i]
   return rquote
     var srcColoring = RG.c.legion_point_coloring_create()
@@ -758,7 +807,8 @@ function R.Relation:emitQueuePartInit(ctxt, i)
         for x = 0, NX do
           var qBase : int64
           for qStart in q do
-            qBase = __raw(qStart).value + (z*NX*NY + y*NX + x) * [self:MaxXferNum()]
+            qBase =
+              __raw(qStart).value + (z*NX*NY + y*NX + x) * [self:MaxXferNum()]
             break
           end
           RG.c.legion_point_coloring_add_range(
@@ -825,8 +875,8 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
       end
       var [qBasePtr]
       do
-        var acc =
-          RG.c.legion_physical_region_get_field_accessor_array(__physical([q])[0], __fields([q])[0])
+        var acc = RG.c.legion_physical_region_get_field_accessor_array
+                    (__physical([q])[0], __fields([q])[0])
         for qPtr in [q] do
           [qBasePtr] = RG.c.legion_accessor_array_ref(acc, __raw(qPtr))
           break
@@ -843,7 +893,8 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
             if not [bool]([q][qPtr][ [self:validFieldOffset()] ]) then
               pushElement(qBasePtr, idx, r[rPtr])
               rPtr.__valid = false
-              RG.assert([bool]([q][qPtr][ [self:validFieldOffset()] ]), 'Element did not get copied properly')
+              RG.assert([bool]([q][qPtr][ [self:validFieldOffset()] ]),
+                        'Element did not get copied properly')
               break
             end
             idx += 1
@@ -910,45 +961,45 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
   return pullAll
 end)
 
--- ProgramContext -> RG.rquote
-function R.Relation:emitPrimPartUpdate(ctxt)
+-- () -> RG.rquote
+function R.Relation:emitPrimPartUpdate()
   local fld = assert(self:AutoPartitionField())
   if self:isFlexible() then
     local pushAll = self:emitPushAll()
     local pullAll = self:emitPullAll()
     return rquote
-      for c in [ctxt.primColors] do
-        pushAll(c, [ctxt.primPart[self]][c],
-                [ctxt.qSrcParts[self]:map(function(qSrcPart)
+      for c in [A.primColors()] do
+        pushAll(c, [self:primPartSymbol()][c],
+                [self:qSrcParts():map(function(qSrcPart)
                   return rexpr qSrcPart[c] end
                 end)])
       end
-      for c in [ctxt.primColors] do
-        pullAll(c, [ctxt.primPart[self]][c],
-                [ctxt.qDstParts[self]:map(function(qDstPart)
+      for c in [A.primColors()] do
+        pullAll(c, [self:primPartSymbol()][c],
+                [self:qDstParts():map(function(qDstPart)
                   return rexpr qDstPart[c] end
                 end)])
       end
       -- TODO: Check that all out-queues have been emptied out.
     end
   else
-    local domRg = ctxt.relMap[self]
-    local domPart = ctxt.primPart[self]
-    local rngPart = ctxt.primPart[fld:Type().relation]
+    local domRg = self:regionSymbol()
+    local domPart = self:primPartSymbol()
+    local rngPart = fld:Type().relation:primPartSymbol()
     return rquote
       domPart = preimage(domRg, rngPart, domRg.[fld:Name()])
     end
   end
 end
 
--- ProgramContext -> RG.rquote
-function R.Relation:emitPrimPartCheck(ctxt)
+-- () -> RG.rquote
+function R.Relation:emitPrimPartCheck()
   assert(self:isFlexible())
   local autoPartFld = assert(self:AutoPartitionField())
-  local domPart = ctxt.primPart[self]
-  local rngPart = ctxt.primPart[autoPartFld:Type().relation]
+  local domPart = self:primPartSymbol()
+  local rngPart = autoPartFld:Type().relation:primPartSymbol()
   return rquote
-    for c in [ctxt.primColors] do
+    for c in [A.primColors()] do
       for x in [domPart][c] do
         if x.__valid then
           -- TODO: This membership check is inefficient; we should do the
@@ -1150,7 +1201,9 @@ function AST.UserFunction:toTask(info)
       block = rquote if [rel][loopVar].__valid then [block] end end
     end
     if RG.config['openmp'] then
-      block = rquote __demand(__openmp) for [loopVar] in [ctxt.domainSym] do [block] end end
+      block = rquote
+        __demand(__openmp) for [loopVar] in [ctxt.domainSym] do [block] end
+      end
     else
       block = rquote for [loopVar] in [ctxt.domainSym] do [block] end end
     end
@@ -1939,44 +1992,45 @@ end -- if USE_HDF
 -- Control program translation
 -------------------------------------------------------------------------------
 
--- ProgramContext -> RG.rquote
-function M.AST.Stmt:toRQuote(ctxt)
+-- () -> RG.rquote
+function M.AST.Stmt:toRQuote()
   error('Abstract method')
 end
-function M.AST.Block:toRQuote(ctxt)
+function M.AST.Block:toRQuote()
   return rquote
-    [self.stmts:map(function(s) return s:toRQuote(ctxt) end)]
+    [self.stmts:map(function(s) return s:toRQuote() end)]
   end
 end
-function M.AST.ForEach:toRQuote(ctxt)
+function M.AST.ForEach:toRQuote()
   -- Translate kernel to task
   local info = self.fun:_get_typechecked(42, self.rel, {})
   local tsk, fCtxt = self.fun:toKernelTask()
   -- Collect arguments for call
   local actualArgs = newlist()
   local c = RG.newsymbol(nil, 'c')
-  if RG.config['parallelize'] and not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
+  if RG.config['parallelize'] and not (isEmpty(info.inserts) and
+                                       isEmpty(info.deletes)) then
     -- HACK: Need to manually parallelize insertion kernels.
     assert(not self.subset)
-    actualArgs:insert(rexpr [ctxt.primPart[self.rel]][c] end)
+    actualArgs:insert(rexpr [self.rel:primPartSymbol()][c] end)
     for _,rel in ipairs(fCtxt.accessedRels) do
-      actualArgs:insert(rexpr [ctxt.primPart[rel]][c] end)
+      actualArgs:insert(rexpr [rel:primPartSymbol()][c] end)
     end
   else
-    actualArgs:insert(self.subset and ctxt.subsetMap[self.subset]
-                      or ctxt.relMap[self.rel])
+    actualArgs:insert(self.subset and self.subset:subRegionSymbol()
+                      or self.rel:regionSymbol())
     for _,rel in ipairs(fCtxt.accessedRels) do
-      actualArgs:insert(ctxt.relMap[rel])
+      actualArgs:insert(rel:regionSymbol())
     end
   end
   for _,g in ipairs(fCtxt.readGlobals) do
-    actualArgs:insert(assert(ctxt.globalMap[g]))
+    actualArgs:insert(g:varSymbol())
   end
   -- Synthesize call expression
   local callExpr = rexpr [tsk]([actualArgs]) end
   local callQuote = rquote [callExpr] end
   if fCtxt.reducedGlobal then
-    local retSym = ctxt.globalMap[fCtxt.reducedGlobal]
+    local retSym = fCtxt.reducedGlobal:varSymbol()
     local op = fCtxt.globalReduceOp
     callQuote =
       (op == '+')   and rquote [retSym] +=   [callExpr]     end or
@@ -1987,10 +2041,11 @@ function M.AST.ForEach:toRQuote(ctxt)
       (op == 'min') and rquote [retSym] min= [callExpr]     end or
       assert(false)
   end
-  if RG.config['parallelize'] and not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
+  if RG.config['parallelize'] and not (isEmpty(info.inserts) and
+                                       isEmpty(info.deletes)) then
     -- HACK: Need to manually parallelize insertion kernels.
     callQuote = rquote
-      for [c] in [ctxt.primColors] do
+      for [c] in [A.primColors()] do
         [callQuote]
       end
     end
@@ -2000,7 +2055,7 @@ function M.AST.ForEach:toRQuote(ctxt)
   if RG.config['parallelize'] then
     local pt = info.field_use[self.rel:AutoPartitionField()]
     if pt and pt.write then
-      primPartQuote = self.rel:emitPrimPartUpdate(ctxt)
+      primPartQuote = self.rel:emitPrimPartUpdate()
     end
   end
   return rquote
@@ -2008,80 +2063,80 @@ function M.AST.ForEach:toRQuote(ctxt)
     [primPartQuote]
   end
 end
-function M.AST.If:toRQuote(ctxt)
+function M.AST.If:toRQuote()
   if self.elseBlock then
     return rquote
-      var thenFlag = [int]([self.cond:toRExpr(ctxt)])
+      var thenFlag = [int]([self.cond:toRExpr()])
       var elseFlag = 1 - thenFlag
       while thenFlag > 0 do
-        [self.thenBlock:toRQuote(ctxt)]
+        [self.thenBlock:toRQuote()]
         thenFlag -= 1
       end
       while elseFlag > 0 do
-        [self.elseBlock:toRQuote(ctxt)]
+        [self.elseBlock:toRQuote()]
         elseFlag -= 1
       end
     end
   else
     return rquote
-      var flag = [int]([self.cond:toRExpr(ctxt)])
+      var flag = [int]([self.cond:toRExpr()])
       while flag > 0 do
-        [self.thenBlock:toRQuote(ctxt)]
+        [self.thenBlock:toRQuote()]
         flag -= 1
       end
     end
   end
 end
-function M.AST.FillField:toRQuote(ctxt)
+function M.AST.FillField:toRQuote()
   error('Fill operations are handled separately')
 end
-function M.AST.SetGlobal:toRQuote(ctxt)
+function M.AST.SetGlobal:toRQuote()
   return rquote
-    [ctxt.globalMap[self.global]] = [self.expr:toRExpr(ctxt)]
+    [self.global:varSymbol()] = [self.expr:toRExpr()]
   end
 end
-function M.AST.While:toRQuote(ctxt)
+function M.AST.While:toRQuote()
   if self.spmd then
     return rquote
       __demand(__spmd)
-      while [self.cond:toRExpr(ctxt)] do
-        [self.body:toRQuote(ctxt)]
+      while [self.cond:toRExpr()] do
+        [self.body:toRQuote()]
       end
     end
   else
     return rquote
-      while [self.cond:toRExpr(ctxt)] do
-        [self.body:toRQuote(ctxt)]
+      while [self.cond:toRExpr()] do
+        [self.body:toRQuote()]
       end
     end
   end
 end
-function M.AST.Do:toRQuote(ctxt)
+function M.AST.Do:toRQuote()
   if self.spmd then
     return rquote
       __demand(__spmd)
       do
-        [self.body:toRQuote(ctxt)]
+        [self.body:toRQuote()]
       end
     end
   else
     return rquote
       do
-        [self.body:toRQuote(ctxt)]
+        [self.body:toRQuote()]
       end
     end
   end
 end
-function M.AST.Print:toRQuote(ctxt)
-  local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
+function M.AST.Print:toRQuote()
+  local valRExprs = self.vals:map(function(v) return v:toRExpr() end)
   return rquote
     C.printf([self.fmt], valRExprs)
   end
 end
-function M.AST.Dump:toRQuote(ctxt)
+function M.AST.Dump:toRQuote()
   local dump = self.rel:emitDump(self.flds)
-  local relSym = ctxt.relMap[self.rel]
-  local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
+  local relSym = self.rel:regionSymbol()
+  local valRExprs = self.vals:map(function(v) return v:toRExpr() end)
   return rquote
     var filename = [rawstring](C.malloc(256))
     C.snprintf(filename, 256, [self.file], valRExprs)
@@ -2089,17 +2144,17 @@ function M.AST.Dump:toRQuote(ctxt)
     C.free(filename)
   end
 end
-function M.AST.Load:toRQuote(ctxt)
+function M.AST.Load:toRQuote()
   local load = self.rel:emitLoad(self.flds)
-  local relSym = ctxt.relMap[self.rel]
-  local valRExprs = self.vals:map(function(v) return v:toRExpr(ctxt) end)
+  local relSym = self.rel:regionSymbol()
+  local valRExprs = self.vals:map(function(v) return v:toRExpr() end)
   local primPartQuote = rquote end
   if RG.config['parallelize'] then
     if self.flds:find(self.rel:AutoPartitionField()) then
       if self:isFlexible() then
-        primPartQuote = self.rel:emitPrimPartCheck(ctxt)
+        primPartQuote = self.rel:emitPrimPartCheck()
       else
-        primPartQuote = self.rel:emitPrimPartUpdate(ctxt)
+        primPartQuote = self.rel:emitPrimPartUpdate()
       end
     end
   end
@@ -2111,29 +2166,29 @@ function M.AST.Load:toRQuote(ctxt)
     [primPartQuote]
   end
 end
-function M.AST.Inline:toRQuote(ctxt)
-  return ctxt.modExports[self.export.mod][self.export.name]
+function M.AST.Inline:toRQuote()
+  return self.quot
 end
 
--- ProgramContext -> RG.rexpr
-function M.AST.Cond:toRExpr(ctxt)
+-- () -> RG.rexpr
+function M.AST.Cond:toRExpr()
   error('Abstract method')
 end
-function M.AST.Literal:toRExpr(ctxt)
+function M.AST.Literal:toRExpr()
   return rexpr [self.val] end
 end
-function M.AST.And:toRExpr(ctxt)
-  return rexpr [self.lhs:toRExpr(ctxt)] and [self.rhs:toRExpr(ctxt)] end
+function M.AST.And:toRExpr()
+  return rexpr [self.lhs:toRExpr()] and [self.rhs:toRExpr()] end
 end
-function M.AST.Or:toRExpr(ctxt)
-  return rexpr [self.lhs:toRExpr(ctxt)] or [self.rhs:toRExpr(ctxt)] end
+function M.AST.Or:toRExpr()
+  return rexpr [self.lhs:toRExpr()] or [self.rhs:toRExpr()] end
 end
-function M.AST.Not:toRExpr(ctxt)
-  return rexpr not [self.cond:toRExpr(ctxt)] end
+function M.AST.Not:toRExpr()
+  return rexpr not [self.cond:toRExpr()] end
 end
-function M.AST.Compare:toRExpr(ctxt)
-  local a = self.lhs:toRExpr(ctxt)
-  local b = self.rhs:toRExpr(ctxt)
+function M.AST.Compare:toRExpr()
+  local a = self.lhs:toRExpr()
+  local b = self.rhs:toRExpr()
   return
     (self.op == '==') and rexpr a == b end or
     (self.op == '~=') and rexpr a ~= b end or
@@ -2144,20 +2199,19 @@ function M.AST.Compare:toRExpr(ctxt)
     assert(false)
 end
 
--- ProgramContext -> RG.rexpr
-function M.AST.Expr:toRExpr(ctxt)
+-- () -> RG.rexpr
+function M.AST.Expr:toRExpr()
   error('Abstract method')
 end
-function M.AST.Const:toRExpr(ctxt)
+function M.AST.Const:toRExpr()
   return rexpr [toRConst(self.val)] end
 end
-function M.AST.GetGlobal:toRExpr(ctxt)
-  local globSym = assert(ctxt.globalMap[self.global])
-  return rexpr globSym end
+function M.AST.GetGlobal:toRExpr()
+  return rexpr [self.global:varSymbol()] end
 end
-function M.AST.BinaryOp:toRExpr(ctxt)
-  local a = self.lhs:toRExpr(ctxt)
-  local b = self.rhs:toRExpr(ctxt)
+function M.AST.BinaryOp:toRExpr()
+  local a = self.lhs:toRExpr()
+  local b = self.rhs:toRExpr()
   return
     (self.op == '+')   and rexpr    a + b end or
     (self.op == '-')   and rexpr    a - b end or
@@ -2168,15 +2222,15 @@ function M.AST.BinaryOp:toRExpr(ctxt)
     (self.op == 'min') and rexpr min(a,b) end or
     assert(false)
 end
-function M.AST.UnaryOp:toRExpr(ctxt)
-  local a = self.arg:toRExpr(ctxt)
+function M.AST.UnaryOp:toRExpr()
+  local a = self.arg:toRExpr()
   return
     (self.op == '-') and rexpr -a end or
     assert(false)
 end
 
--- ProgramContext, M.AST.FillField -> RG.rquote*
-local function emitFillTaskCalls(ctxt, fillStmts)
+-- M.AST.FillField -> RG.rquote*
+local function emitFillTaskCalls(fillStmts)
   local fillsPerRelation = {} -- map(R.Relation,M.AST.FillField)
   local mustUpdatePrimPart = {} -- set(R.Relation)
   for _,fill in ipairs(fillStmts) do
@@ -2230,34 +2284,32 @@ local function emitFillTaskCalls(ctxt, fillStmts)
   end
   local calls = newlist() -- RG.rquote*
   for rel,tsk in pairs(fillTasks) do
-    calls:insert(rquote [tsk]([ctxt.relMap[rel]]) end)
+    calls:insert(rquote [tsk]([rel:regionSymbol()]) end)
     if mustUpdatePrimPart[rel] then
-      calls:insert(rel:emitPrimPartUpdate(ctxt))
+      calls:insert(rel:emitPrimPartUpdate())
     end
   end
   return calls
 end
+
+-- () -> RG.symbol()
+L.Global.varSymbol = terralib.memoize(function(self)
+  return RG.newsymbol(toRType(self:Type()), idSanitize(self:Name()))
+end)
+
+-- () -> RG.symbol()
+R.Subset.subRegionSymbol = terralib.memoize(function(self)
+  return RG.newsymbol(nil, idSanitize(self:FullName()))
+end)
 
 -- (()->())?, (string*)? -> ()
 function A.translateAndRun(mapper_registration, link_flags)
   if DEBUG then print('import "regent"') end
   local header = newlist() -- RG.rquote*
   local body = newlist() -- RG.rquote*
-  local ctxt = { -- ProgramContext
-    globalMap  = {},  -- map(L.Global, RG.symbol)
-    relMap     = {},  -- map(R.Relation, RG.symbol)
-    subsetMap  = {},  -- map(R.Subset, RG.symbol)
-    primPart   = {},  -- map(R.Relation, RG.symbol)
-    queues     = {},  -- map(R.Relation, RG.symbol*)
-    qSrcParts  = {},  -- map(R.Relation, RG.symbol*)
-    qDstParts  = {},  -- map(R.Relation, RG.symbol*)
-    primColors = nil, -- RG.symbol
-    modExports = {},  -- map(M.AST.Module, map(string,RG.rquote))
-  }
   -- Collect declarations
   local globalInits = {} -- map(L.Global, M.ExprConst)
   local rels = newlist() -- R.Relation*
-  local modules = newlist() -- AST.Module
   for _,decl in ipairs(M.decls()) do
     if M.AST.NewField.check(decl) then
       -- Do nothing
@@ -2269,21 +2321,17 @@ function A.translateAndRun(mapper_registration, link_flags)
       rels:insert(decl.rel)
     elseif M.AST.NewDivision.check(decl) then
       -- Do nothing
-    elseif M.AST.Import.check(decl) then
-      modules:insert(decl.mod)
     else assert(false) end
   end
   -- Emit global declarations
   for g,val in pairs(globalInits) do
-    local x = RG.newsymbol(toRType(g:Type()), idSanitize(g:Name()))
-    ctxt.globalMap[g] = x
-    header:insert(rquote var [x] = [toRConst(val, g:Type())] end)
+    header:insert(rquote
+      var [g:varSymbol()] = [toRConst(val, g:Type())]
+    end)
   end
   -- Emit region declarations and user-defined divisions
   for _,rel in ipairs(rels) do
-    local rg = RG.newsymbol(nil, rel:Name())
-    ctxt.relMap[rel] = rg
-    header:insert(rel:emitRegionInit(rg))
+    header:insert(rel:emitRegionInit())
     for _,div in ipairs(rel:Divisions()) do
       local colors = RG.newsymbol(nil, 'colors')
       local coloring = RG.newsymbol(nil, 'coloring')
@@ -2304,8 +2352,8 @@ function A.translateAndRun(mapper_registration, link_flags)
           end or
           (#rect == 3) and rexpr
             rect3d{
-              lo = int3d{ x = [rect[1][1]], y = [rect[2][1]], z = [rect[3][1]] },
-              hi = int3d{ x = [rect[1][2]], y = [rect[2][2]], z = [rect[3][2]] }}
+              lo = int3d{ x=[rect[1][1]], y=[rect[2][1]], z=[rect[3][1]] },
+              hi = int3d{ x=[rect[1][2]], y=[rect[2][2]], z=[rect[3][2]] }}
           end or
           assert(false)
         header:insert(rquote
@@ -2315,13 +2363,11 @@ function A.translateAndRun(mapper_registration, link_flags)
       end
       local p = RG.newsymbol(nil, 'p')
       header:insert(rquote
-        var [p] = partition(disjoint, rg, coloring, colors)
+        var [p] = partition(disjoint, [rel:regionSymbol()], coloring, colors)
       end)
       for i,subset in ipairs(div) do
-        local subrg = RG.newsymbol(nil, idSanitize(subset:FullName()))
-        ctxt.subsetMap[subset] = subrg
         header:insert(rquote
-          var [subrg] = p[i-1]
+          var [subset:subRegionSymbol()] = p[i-1]
         end)
       end
       header:insert(rquote
@@ -2331,30 +2377,16 @@ function A.translateAndRun(mapper_registration, link_flags)
   end
   -- Emit primary partitioning scheme
   if RG.config['parallelize'] then
-    ctxt.primColors = RG.newsymbol(nil, 'primColors')
     header:insert(rquote
-      var [ctxt.primColors] = ispace(int3d, {NX,NY,NZ})
+      var [A.primColors()] = ispace(int3d, {NX,NY,NZ})
     end)
     for _,rel in ipairs(rels) do
-      local rg = ctxt.relMap[rel]
-      local p = RG.newsymbol(nil, rel:Name()..'_primPart')
-      ctxt.primPart[rel] = p
-      header:insert(rel:emitPrimPartInit(rg, p, ctxt.primColors))
-      -- Emit transfer queues for flexible relations with an auto-partitioning
-      -- constraint.
+      header:insert(rel:emitPrimPartInit())
+      -- Emit transfer queues for auto-partitioned flexible relations
       if rel:isFlexible() and rel:AutoPartitionField() then
-        ctxt.queues[rel] = newlist()
-        ctxt.qSrcParts[rel] = newlist()
-        ctxt.qDstParts[rel] = newlist()
         for i = 1,#rel:XferStencil() do
-          local q = RG.newsymbol(nil, rel:Name()..'_queue_'..(i-1))
-          ctxt.queues[rel]:insert(q)
-          local qSrcPart = RG.newsymbol(nil, rel:Name()..'_qSrcPart_'..(i-1))
-          ctxt.qSrcParts[rel]:insert(qSrcPart)
-          local qDstPart = RG.newsymbol(nil, rel:Name()..'_qDstPart_'..(i-1))
-          ctxt.qDstParts[rel]:insert(qDstPart)
-          header:insert(rel:emitQueueInit(q))
-          header:insert(rel:emitQueuePartInit(ctxt, i))
+          header:insert(rel:emitQueueInit(i))
+          header:insert(rel:emitQueuePartInit(i))
         end
       end
     end
@@ -2366,36 +2398,27 @@ function A.translateAndRun(mapper_registration, link_flags)
       fillStmts:insert(s)
     end
   end
-  body:insertall(emitFillTaskCalls(ctxt, fillStmts))
-  -- Emit module loads
-  for _,mod in ipairs(modules) do
-    local modParams = newlist()
-    for _,rel in ipairs(mod.args) do
-      modParams:insert(ctxt.relMap[rel])
-      modParams:insert(rel:regionType())
-    end
-    ctxt.modExports[mod] = (require (mod.fname))(unpack(modParams))
-  end
+  body:insertall(emitFillTaskCalls(fillStmts))
   -- Process other statements
   for _,s in ipairs(M.stmts()) do
     if not M.AST.FillField.check(s) then
-      body:insert(s:toRQuote(ctxt))
+      body:insert(s:toRQuote())
     end
   end
   -- Synthesize main task
   local main
   if RG.config['parallelize'] then
     local opts = newlist() -- RG.rexpr*
-    opts:insertall(rels:map(function(rel) return ctxt.primPart[rel] end))
-    opts:insert(rexpr [ctxt.primColors] end)
+    opts:insertall(rels:map(function(rel) return rel:primPartSymbol() end))
+    opts:insert(A.primColors())
     for _,domRel in ipairs(rels) do
       local autoPartFld = domRel:AutoPartitionField()
       if domRel:isFlexible() and autoPartFld then
         local rngRel = autoPartFld:Type().relation
-        local domRg = ctxt.relMap[domRel]
-        local domPart = ctxt.primPart[domRel]
-        local rngRg = ctxt.relMap[rngRel]
-        local rngPart = ctxt.primPart[rngRel]
+        local domRg = domRel:regionSymbol()
+        local domPart = domRel:primPartSymbol()
+        local rngRg = rngRel:regionSymbol()
+        local rngPart = rngRel:primPartSymbol()
         opts:insert(rexpr
           image(rngRg, domPart, domRg.[autoPartFld:Name()]) <= rngPart
         end)

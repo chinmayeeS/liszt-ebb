@@ -22,6 +22,7 @@
 -- DEALINGS IN THE SOFTWARE.
 
 import 'ebb.src.adt'
+import 'regent'
 
 local M = {}
 package.loaded['ebb.src.main'] = M
@@ -32,6 +33,8 @@ local isFunction = function(x) return L.is_function(x) end
 local isGlobal   = function(x) return L.is_global(x) end
 local isRelation = function(x) return L.is_relation(x) end
 local isSubset   = function(x) return L.is_subset(x) end
+
+local RG  = regentlib
 
 -------------------------------------------------------------------------------
 -- Control language AST
@@ -62,7 +65,6 @@ local ADT AST
        | NewGlobal { global : Global, init : ExprConst }
        | NewRelation { rel : Relation }
        | NewDivision { subsets : Subset* }
-       | Import { mod : Module }
   Stmt = Block { stmts : Stmt* }
        | ForEach { fun : Function, rel : Relation, subset : Subset? }
        | If { cond : Cond, thenBlock : Stmt?, elseBlock : Stmt? }
@@ -73,7 +75,7 @@ local ADT AST
        | Print { fmt : string, vals : Expr* }
        | Dump { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Load { rel : Relation, flds : string*, file : string, vals : Expr* }
-       | Inline { export : Export }
+       | Inline { quot : RQuote }
   Cond = Literal { val : boolean }
        | And { lhs : Cond, rhs : Cond }
        | Or { lhs : Cond, rhs : Cond }
@@ -83,14 +85,13 @@ local ADT AST
        | GetGlobal { global : Global }
        | BinaryOp { op : string, lhs : Expr, rhs : Expr }
        | UnaryOp { op : string, arg : Expr }
-  Module = { fname : string, args : Relation* }
-  Export = { mod : Module, name : string }
   extern ExprConst isExprConst
   extern Field     isField
   extern Function  isFunction
   extern Global    isGlobal
   extern Relation  isRelation
   extern Subset    isSubset
+  extern RQuote    function(x) return RG.is_rquote(x) end
 end
 M.AST = AST
 
@@ -255,17 +256,7 @@ function M.PRINT(fmt, ...)
   M.stmts():insert(AST.Print(fmt, args))
 end
 
--- string, Relation, ..., Relation -> ()
-function M.IMPORT(fname, ...)
-  local mod = AST.Module(fname, terralib.newlist({...}))
-  M.decls():insert(AST.Import(mod))
-  local proxy = setmetatable({}, {__index = function(self, name)
-    return AST.Export(mod, name)
-  end})
-  return proxy
-end
-
--- AST.Export -> ()
-function M.INLINE(exp)
-  M.stmts():insert(AST.Inline(exp))
+-- RG.rquote -> ()
+function M.INLINE(quot)
+  M.stmts():insert(AST.Inline(quot))
 end
