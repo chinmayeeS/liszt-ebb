@@ -242,8 +242,8 @@ local function registerTask(tsk, name)
     name = name..'_'
   end
   NAME_CACHE[name] = tsk
-  tsk:setname(name)
-  tsk.ast.name[1] = name -- TODO: Dangerous
+  tsk:set_name(name)
+  tsk:get_primary_variant():get_ast().name[1] = name -- TODO: Dangerous
   if DEBUG then
     prettyPrintTask(tsk)
   end
