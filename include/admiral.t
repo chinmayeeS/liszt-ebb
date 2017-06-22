@@ -121,7 +121,7 @@ local function quit(obj)
   print('Unsupported class:')
   if not obj then
     print('Nil')
-  elseif obj.kind then
+  elseif rawget(obj, 'kind') then
     print(obj.kind)
   else
     print('(no kind information)')
@@ -242,8 +242,8 @@ local function registerTask(tsk, name)
     name = name..'_'
   end
   NAME_CACHE[name] = tsk
-  tsk:setname(name)
-  tsk.ast.name[1] = name -- TODO: Dangerous
+  tsk:set_name(name)
+  tsk:get_primary_variant():get_ast().name[1] = name -- XXX: Dangerous
   if DEBUG then
     prettyPrintTask(tsk)
   end
@@ -708,21 +708,12 @@ function R.Relation:emitRegionInit()
   local ispaceExpr = self:emitISpaceInit()
   local fspaceExpr = self:fieldSpace()
   local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
-  local allocQuote = rquote end
-  if not self:isGrid() then
-    local size = self:Dims()[1]
-    if RG.config['parallelize'] then
-      size = self:primPartSize() * NUM_PRIM_PARTS
-    end
-    allocQuote = rquote new(ptr(fspaceExpr, rg), [size]) end
-  end
   local fillQuote = rquote end
   if self:isFlexible() then
     fillQuote = rquote fill(rg.__valid, false) end
   end
   return rquote
     [declQuote];
-    [allocQuote];
     [fillQuote]
   end
 end
@@ -789,7 +780,6 @@ function R.Relation:emitQueueInit(i)
   local fspaceExpr = self:queueFieldSpace()
   return rquote
     var [q] = region(ispace(ptr, size), fspaceExpr)
-    new(ptr(fspaceExpr, q), size)
   end
 end
 
