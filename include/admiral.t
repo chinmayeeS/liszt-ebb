@@ -2295,7 +2295,6 @@ end)
 
 -- (()->())?, (string*)? -> ()
 function A.translateAndRun(mapper_registration, link_flags)
-  if DEBUG then print('import "regent"') end
   local header = newlist() -- RG.rquote*
   local body = newlist() -- RG.rquote*
   -- Collect declarations
@@ -2426,9 +2425,6 @@ function A.translateAndRun(mapper_registration, link_flags)
     end
   end
   registerTask(main, 'main')
-  if DEBUG then
-    print('regentlib.start('..main:getname()[1]..')')
-  end
   -- Emit to executable or run
   if SAVEOBJ then
     print('Saving executable to '..OBJNAME)
