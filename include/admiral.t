@@ -878,7 +878,8 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     moveChecks:insert(rquote
       do
         var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
-        if elemColor == (partColor + colorOff + {NX,NY,NZ}) % {NX,NY,NZ} then
+        if rPtr.__valid and
+           elemColor == (partColor + colorOff + {NX,NY,NZ}) % {NX,NY,NZ} then
           var idx = 0
           for qPtr in [q] do
             if not [bool]([q][qPtr][ [self:validFieldOffset()] ]) then
