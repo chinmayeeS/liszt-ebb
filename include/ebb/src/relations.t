@@ -123,8 +123,7 @@ function R.NewRelation(params)
   if not is_valid_lua_identifier(params.name) then
     error(valid_name_err_msg.relation, 2)
   end
-  local mode = params.mode or 'PLAIN'
-  if not params.mode and params.dims then mode = 'GRID' end
+  local mode = params.mode
   if mode ~= 'PLAIN' and mode ~= 'GRID' and mode ~= 'FLEXIBLE' then
     error("NewRelation(): Bad 'mode' argument.  Was expecting\n"..
           "  PLAIN, GRID or FLEXIBLE", 2)
