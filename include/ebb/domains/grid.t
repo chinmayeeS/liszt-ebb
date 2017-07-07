@@ -20,7 +20,9 @@
 -- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 -- FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 -- DEALINGS IN THE SOFTWARE.
+
 import "ebb"
+
 local L = require 'ebblib'
 local R = require 'ebb.src.relations'
 
@@ -38,11 +40,9 @@ end)
 local min_impl = L.Macro(function(a,b)
   return ebb `L.imin(a, b)
 end)
-
 local clamp_impl = L.Macro(function(x, lower, upper)
   return ebb `max_impl(lower, min_impl(upper, x))
 end)
-
 -- convert a potentially continuous signed value x to
 -- an address modulo the given uint m
 local wrap_idx = L.Macro(function(x, m)
@@ -58,13 +58,6 @@ local function copy_table(tbl)
   return cpy
 end
 
-local function is_num(obj) return type(obj) == 'number' end
-local function is_bool(obj) return type(obj) == 'boolean' end
-
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
---                                  3d Grid
--------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 
 local function rectangles_3d(X, Y, Z, xb, yb, zb)
@@ -79,13 +72,13 @@ local function rectangles_3d(X, Y, Z, xb, yb, zb)
   }
 end
 
-local function setup3dCells(cells)
+local function addHelpers(cells)
   local Cx, Cy, Cz  = cells._dims[1], cells._dims[2], cells._dims[3]
   local xw, yw, zw  = cells._width[1], cells._width[2], cells._width[3]
   local xo, yo, zo  = cells._origin[1], cells._origin[2], cells._origin[3]
-  local xn_bd       = cells._bd_depth[1]
-  local yn_bd       = cells._bd_depth[2]
-  local zn_bd       = cells._bd_depth[3]
+  local xn_bd       = cells._boundary_depth[1]
+  local yn_bd       = cells._boundary_depth[2]
+  local zn_bd       = cells._boundary_depth[3]
 
   -- relative offset
   cells:NewFieldMacro('__apply_macro', L.Macro(function(c,x,y,z)
@@ -136,88 +129,10 @@ local function setup3dCells(cells)
   end))
 end
 
--------------------------------------------------------------------------------
-
-function Grid.NewGrid3d(params)
-  local calling_convention = [[
-NewGrid3d should be called with named parameters:
-Grid.NewGrid3d{
-  name           = string,  -- name of grid relation
-  dims           = {#,#,#}, -- number of cells in x,y,z (including boundary)
-  origin         = {#,#,#}, -- x,y,z coordinates of grid origin
-  width          = {#,#,#}, -- x,y,z width of grid in coordinate system
-  [boundary_depth = {#,#,#},] -- depth of boundary region (default: {1,1,1})
-                              -- must be 0 on directions that are periodic
-  [periodic       = {bool,bool,bool},] -- use periodic boundary conditions
-                                       -- (default: {false,false,false})
-}]]
-  local function check_params(params)
-    if type(params) ~= 'table' then return false end
-    if type(params.name) ~= 'string' or
-       type(params.dims) ~= 'table' or
-       type(params.origin) ~= 'table' or
-       type(params.width) ~= 'table' then return false end
-    local check = true
-    for i=1,3 do
-      check = check and is_num(params.dims[i])
-                    and is_num(params.origin[i])
-                    and is_num(params.width[i])
-    end
-    local bd = params.boundary_depth
-    local pb = params.periodic_boundary
-    if bd then check = check and
-        type(bd) == 'table' and
-        is_num(bd[1]) and
-        is_num(bd[2]) and
-        is_num(bd[3]) end
-    if pb then check = check and
-        type(pb) == 'table' and
-        is_bool(pb[1]) and
-        is_bool(pb[2]) and
-        is_bool(pb[3]) end
-    if bd and pb then check = check and
-        not (pb[1] and bd[1] ~= 0) and
-        not (pb[2] and bd[2] ~= 0) and
-        not (pb[3] and bd[3] ~= 0) end
-    return check
-  end
-  if not check_params(params) then error(calling_convention, 2) end
-
-  -- defaults
-  local wrap_bd  = params.periodic_boundary or {false, false, false}
-  local bd_depth = params.boundary_depth    or {1, 1, 1}
-
-  local cells = L.NewRelation { name = params.name,
-                                mode = 'GRID',
-                                dims = copy_table(params.dims) }
-  rawset(cells, '_origin',   copy_table(params.origin))
-  rawset(cells, '_width',    copy_table(params.width))
-  rawset(cells, '_bd_depth', copy_table(bd_depth))
-  rawset(cells, '_periodic', copy_table(wrap_bd))
-  setup3dCells(cells)
-
-  return cells
-end
-
-function R.Relation:Origin()
-  assert(self:isGrid())
-  return copy_table(self._origin)
-end
-function R.Relation:Width()
-  assert(self:isGrid())
-  return copy_table(self._width)
-end
-function R.Relation:BoundaryDepth()
-  assert(self:isGrid())
-  return copy_table(self._bd_depth)
-end
-function R.Relation:Periodic()
-  assert(self:isGrid())
-  return copy_table(self._periodic)
-end
-function R.Relation:CellWidth()
-  assert(self:isGrid())
-  return { self._width[1] / (1.0 * self._dims[1]),
-           self._width[2] / (1.0 * self._dims[2]),
-           self._width[3] / (1.0 * self._dims[3]) }
+function Grid.NewGrid(params)
+  local params = copy_table(params)
+  params.mode = 'GRID'
+  local grid = L.NewRelation(params)
+  addHelpers(grid)
+  return grid
 end

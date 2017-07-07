@@ -21,7 +21,6 @@
 -- FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 -- DEALINGS IN THE SOFTWARE.
 
--- file/module namespace table
 local R = {}
 package.loaded["ebb.src.relations"] = R
 
@@ -30,13 +29,7 @@ local T     = require "ebb.src.types"
 local F     = require "ebb.src.functions"
 local M     = require "ebb.src.main"
 
-local keyT      = T.key
-
-local is_macro      = Pre.is_macro
-local is_function   = F.is_function
-
-
-local PN = require "ebb.lib.pathname"
+-------------------------------------------------------------------------------
 
 local valid_name_err_msg_base =
   "must be valid Lua Identifiers: a letter or underscore,"..
@@ -48,20 +41,29 @@ local valid_name_err_msg = {
 }
 local function is_valid_lua_identifier(name)
   if type(name) ~= 'string' then return false end
-
   -- regex for valid LUA identifiers
   if not name:match('^[_%a][_%w]*$') then return false end
-
   return true
 end
 
-local function is_int(x)
-  return type(x) == 'number' and x == math.floor(x)
+local function copy_table(tbl)
+  local cpy = {}
+  for k,v in pairs(tbl) do cpy[k] = v end
+  return cpy
+end
+
+local function is_num(x) return type(x) == 'number' end
+local function is_bool(x) return type(x) == 'boolean' end
+local function is_int(x) return type(x) == 'number' and x == math.floor(x) end
+
+local function all(list, pred)
+  for _,x in ipairs(list) do
+    if not pred(x) then return false end
+  end
+  return true
 end
 
 -------------------------------------------------------------------------------
--------------------------------------------------------------------------------
-
 
 local Relation    = {}
 Relation.__index  = Relation
@@ -82,15 +84,11 @@ R.Subset          = Subset
 local function is_subset(obj) return getmetatable(obj) == Subset end
 R.is_subset       = is_subset
 
-
--------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 --[[  Relation methods                                                     ]]--
 -------------------------------------------------------------------------------
--------------------------------------------------------------------------------
 
-
--- A Relation can be in at most one of the following MODES
+-- A Relation must be in one of the following MODES:
 --    PLAIN
 --    GRID
 --    FLEXIBLE
@@ -98,105 +96,126 @@ function Relation:isPlain()       return self._mode == 'PLAIN'      end
 function Relation:isGrid()        return self._mode == 'GRID'       end
 function Relation:isFlexible()    return self._mode == 'FLEXIBLE'   end
 
--- Create a generic relation
--- local myrel = L.NewRelation {
---   name = 'myrel',
---   mode = 'PLAIN' | 'GRID' | 'FLEXIBLE',
---   -- if mode == 'PLAIN':
---   size = 35,
---   -- if mode == 'GRID':
---   dims = {45,90},
---   -- if mode == 'FLEXIBLE':
---   size = 100,
---   max_skew = 3.0,
---   max_xfer_num = 10,
---   xfer_stencil = {{0,0,1},{0,0,-1},...},
--- }
+local errorMsg = [[NewRelation must be called as follows:
+local myrel = L.NewRelation {
+  name = string,
+  mode = 'PLAIN' | 'GRID' | 'FLEXIBLE',
+  --------------------------------------------------------------------------
+  -- if mode == 'PLAIN':
+  --------------------------------------------------------------------------
+  size = 35,
+  --------------------------------------------------------------------------
+  -- if mode == 'GRID':
+  --------------------------------------------------------------------------
+  dims = {#,#,#}, -- number of cells in x,y,z (incl. boundary)
+  origin = {#,#,#}, -- coordinates of grid origin (incl. boundary)
+  width = {#,#,#}, -- x,y,z width of grid (incl. boundary)
+  [boundary_depth = {#,#,#},] -- depth of boundary region (default: {1,1,1})
+                              -- must be 0 on directions that are periodic
+  [periodic = {bool,bool,bool},] -- use periodic boundary conditions
+                                 -- (default: {false,false,false})
+  --------------------------------------------------------------------------
+  -- if mode == 'FLEXIBLE':
+  --------------------------------------------------------------------------
+  size = 100,
+  max_skew = 3.0,
+  max_xfer_num = 10,
+  xfer_stencil = {{0,0,1},{0,0,-1},...},
+}]]
+
 local relation_uid = 0
 function R.NewRelation(params)
-  -- CHECK the parameters coming in
-  if type(params) ~= 'table' then
-    error("NewRelation() expects a table of named arguments", 2)
-  elseif type(params.name) ~= 'string' then
-    error("NewRelation() expects 'name' string argument", 2)
-  end
-  if not is_valid_lua_identifier(params.name) then
-    error(valid_name_err_msg.relation, 2)
-  end
-  local mode = params.mode
-  if mode ~= 'PLAIN' and mode ~= 'GRID' and mode ~= 'FLEXIBLE' then
-    error("NewRelation(): Bad 'mode' argument.  Was expecting\n"..
-          "  PLAIN, GRID or FLEXIBLE", 2)
-  end
-  if mode == 'PLAIN' then
-    if type(params.size) ~= 'number' then
-      error("NewRelation() expects 'size' numeric argument", 2)
-    end
-  elseif mode == 'GRID' then
-    if type(params.dims) ~= 'table' or
-       (#params.dims ~= 2 and #params.dims ~= 3)
-    then
-      error("NewRelation(): Grids must specify 'dim' argument; "..
-            "a table of 2 to 3 numbers specifying grid size", 2)
-    end
-  elseif mode == 'FLEXIBLE' then
-    if type(params.size) ~= 'number' then
-      error("NewRelation() expects 'size' numeric argument", 2)
-    end
-    if type(params.max_skew) ~= 'number' then
-      error("NewRelation() expects 'max_skew' numeric argument", 2)
-    end
-    if not is_int(params.max_xfer_num) then
-      error("NewRelation() expects 'max_xfer_num' integer argument", 2)
-    end
-    if not terralib.israwlist(params.xfer_stencil) then
-      error("NewRelation(): 'xfer_stencil' argument must be a list", 2)
-    end
-    for _,dir in ipairs(params.xfer_stencil) do
-      if (not terralib.israwlist(dir) or #dir ~= 3 or type(dir[1]) ~= 'number'
-          or type(dir[2]) ~= 'number' or type(dir[3]) ~= 'number') then
-        error("NewRelation(): Each element of 'xfer_stencil' argument must "..
-              "be a list of 3 integers", 2)
+  -- Check the parameters
+  local function checkParams(params)
+    local check =
+      type(params) == 'table' and
+      is_valid_lua_identifier(params.name) and
+      (params.mode == 'PLAIN' or
+       params.mode == 'GRID' or
+       params.mode == 'FLEXIBLE')
+    if params.mode == 'PLAIN' then
+      check = check and
+        is_int(params.size)
+    elseif params.mode == 'GRID' then
+      check = check and
+        terralib.israwlist(params.dims) and
+        #params.dims == 3 and all(params.dims, is_int) and
+        terralib.israwlist(params.origin) and
+        #params.origin == 3 and all(params.origin, is_num) and
+        terralib.israwlist(params.width) and
+        #params.width == 3 and all(params.width, is_num)
+      local bd = params.boundary_depth
+      local pb = params.periodic_boundary
+      if bd then
+        check = check and
+          terralib.israwlist(bd) and #bd == 3 and all(bd, is_num)
       end
-    end
-  else assert(false) end
+      if pb then
+        check = check and
+          terralib.israwlist(pb) and #pb == 3 and all(pb, is_bool)
+      end
+      if bd and pb then
+        check = check and
+          not (pb[1] and bd[1] ~= 0) and
+          not (pb[2] and bd[2] ~= 0) and
+          not (pb[3] and bd[3] ~= 0)
+      end
+    elseif params.mode == 'FLEXIBLE' then
+      check = check and
+        is_int(params.size) and
+        is_num(params.max_skew) and
+        is_int(params.max_xfer_num) and
+        terralib.israwlist(params.xfer_stencil) and
+        all(params.xfer_stencil, function(dir) return
+          terralib.israwlist(dir) and #dir == 3 and all(dir, is_int)
+        end)
+    else assert(false) end
+    return check
+  end
+  if not checkParams(params) then error(errorMsg, 2) end
 
-  -- CONSTRUCT and return the relation
+  -- construct the relation
   local rel = setmetatable( {
     _name       = params.name,
-    _mode       = mode,
+    _mode       = params.mode,
     _uid        = relation_uid,
 
     _fields     = terralib.newlist(),
     _divisions  = terralib.newlist(),
     _macros     = terralib.newlist(),
     _functions  = terralib.newlist(),
-
-    _auto_part_fld = nil,
-    _incoming_refs = {}, -- used for walking reference graph
-  },
-  Relation)
+  }, Relation)
   relation_uid = relation_uid + 1 -- increment unique id counter
 
-  -- store mode dependent values
+  -- perform mode-dependent setup
   local size
-  if mode == 'PLAIN' then
+  if params.mode == 'PLAIN' then
+    -- size calculation
     size = params.size
-  elseif mode == 'GRID' then
+  elseif params.mode == 'GRID' then
+    -- size calculation
     size = 1
-    rawset(rel, '_dims', {})
-    for i,n in ipairs(params.dims) do
-      rel._dims[i]    = n
-      size            = size * n
-    end
-  elseif mode == 'FLEXIBLE' then
+    -- defaults
+    local bd_depth = params.boundary_depth or {1, 1, 1}
+    local periodic = params.periodic       or {false, false, false}
+    -- mode-dependent values
+    rawset(rel, '_dims',           copy_table(params.dims))
+    rawset(rel, '_origin',         copy_table(params.origin))
+    rawset(rel, '_width',          copy_table(params.width))
+    rawset(rel, '_boundary_depth', copy_table(bd_depth))
+    rawset(rel, '_periodic',       copy_table(periodic))
+  elseif params.mode == 'FLEXIBLE' then
+    -- size calculation
     size = params.size
+    -- mode-dependent values
+    rawset(rel, '_auto_part_fld', nil)
     rawset(rel, '_max_skew', params.max_skew)
     rawset(rel, '_max_xfer_num', params.max_xfer_num)
     rawset(rel, '_xfer_stencil', terralib.newlist(params.xfer_stencil))
-  end
+  else assert(false) end
   rawset(rel, '_logical_size',  size)
 
+  -- register & return the relation
   M.decls():insert(M.AST.NewRelation(rel))
   return rel
 end
@@ -204,14 +223,20 @@ end
 function Relation:_INTERNAL_UID()
   return self._uid
 end
-function Relation:Size()
-  return self._logical_size
-end
 function Relation:Name()
   return self._name
 end
 function Relation:Mode()
   return self._mode
+end
+function Relation:Size()
+  return self._logical_size
+end
+function Relation:Dims()
+  if not self:isGrid() then
+    return { self:Size() }
+  end
+  return copy_table(self._dims)
 end
 function Relation:Fields()
   return self._fields
@@ -219,35 +244,9 @@ end
 function Relation:Divisions()
   return self._divisions
 end
-function Relation:AutoPartitionField()
-  return self._auto_part_fld
-end
-function Relation:Dims()
-  if not self:isGrid() then
-    return { self:Size() }
-  end
-  local dimret = {}
-  for i,n in ipairs(self._dims) do dimret[i] = n end
-  return dimret
-end
-function Relation:Periodic()
-  if not self:isGrid() then return { false } end
-  local wraps = {}
-  for i,p in ipairs(self._dims) do wraps[i] = p end
-  return wraps
-end
-function Relation:MaxSkew()
-  return self._max_skew
-end
-function Relation:MaxXferNum()
-  return self._max_xfer_num
-end
-function Relation:XferStencil()
-  return self._xfer_stencil
-end
 
 function Relation:foreach(user_func, ...)
-  if not is_function(user_func) then
+  if not F.is_function(user_func) then
     error('foreach(): expects an ebb function as the first argument', 2)
   end
   user_func:_doForEach(self, ...)
@@ -258,6 +257,61 @@ function Relation:__newindex(fieldname,value)
   error("Cannot assign members to Relation object "..
       "(did you mean to call relation:New...?)", 2)
 end
+
+-------------------------------------------------------------------------------
+--[[  Grids                                                                ]]--
+-------------------------------------------------------------------------------
+
+function R.Relation:Origin()
+  assert(self:isGrid())
+  return copy_table(self._origin)
+end
+function R.Relation:Width()
+  assert(self:isGrid())
+  return copy_table(self._width)
+end
+function R.Relation:BoundaryDepth()
+  assert(self:isGrid())
+  return copy_table(self._bd_depth)
+end
+function R.Relation:Periodic()
+  assert(self:isGrid())
+  return copy_table(self._periodic)
+end
+function R.Relation:CellWidth()
+  assert(self:isGrid())
+  return { self._width[1] / (1.0 * self._dims[1]),
+           self._width[2] / (1.0 * self._dims[2]),
+           self._width[3] / (1.0 * self._dims[3]) }
+end
+
+-------------------------------------------------------------------------------
+--[[  Flexible relations                                                   ]]--
+-------------------------------------------------------------------------------
+
+function Relation:AutoPartitionField()
+  -- assert(self:isFlexible())
+  return self._auto_part_fld
+end
+
+function Relation:MaxSkew()
+  assert(self:isFlexible())
+  return self._max_skew
+end
+
+function Relation:MaxXferNum()
+  assert(self:isFlexible())
+  return self._max_xfer_num
+end
+
+function Relation:XferStencil()
+  assert(self:isFlexible())
+  return self._xfer_stencil
+end
+
+-------------------------------------------------------------------------------
+--[[  Virtual fields                                                       ]]--
+-------------------------------------------------------------------------------
 
 function Relation:NewFieldMacro(name, macro)
   if not name or type(name) ~= "string" then
@@ -271,7 +325,7 @@ function Relation:NewFieldMacro(name, macro)
           "That name is already being used.", 2)
   end
 
-  if not is_macro(macro) then
+  if not Pre.is_macro(macro) then
     error("NewFieldMacro() expects a Macro as the 2nd argument", 2)
   end
 
@@ -302,7 +356,7 @@ local function getFieldDispatcher(rel, fname, ufunc)
   if not is_valid_lua_identifier(fname) then
     error(valid_name_err_msg.field, 3)
   end
-  if not is_function(ufunc) then
+  if not F.is_function(ufunc) then
     error("NewField*Function() expects an Ebb Function "..
           "as the last argument", 3)
   end
@@ -360,16 +414,12 @@ function Relation:NewFieldReduceFunction(fname, op, userfunc)
   return userfunc
 end
 
-
 -------------------------------------------------------------------------------
+--[[  Subsets                                                              ]]--
 -------------------------------------------------------------------------------
---[[  Subsets:                                                             ]]--
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
-
 
 function Subset:foreach(user_func, ...)
-  if not is_function(user_func) then
+  if not F.is_function(user_func) then
     error('map(): expects an Ebb function as the argument', 2)
   end
   user_func:_doForEach(self, ...)
@@ -458,13 +508,9 @@ function Relation:NewDivision( rects )
   M.decls():insert(M.AST.NewDivision(division))
 end
 
-
 -------------------------------------------------------------------------------
+--[[  Fields                                                               ]]--
 -------------------------------------------------------------------------------
---[[  Fields:                                                              ]]--
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
-
 
 -- prevent user from modifying the lua table
 function Field:__newindex(name,value)
@@ -506,7 +552,7 @@ function Relation:NewField(name, typ)
   end
 
   if is_relation(typ) then
-    typ = keyT(typ)
+    typ = T.key(typ)
   end
   if not T.istype(typ) or not typ:isfieldvalue() then
     error("NewField() expects an Ebb type or "..
@@ -525,11 +571,6 @@ function Relation:NewField(name, typ)
   rawset(self, name, field)
 
   self._fields:insert(field)
-
-  -- record reverse pointers for key-field references
-  if typ:iskey() then
-    typ:basetype().relation._incoming_refs[field] = 'key_field'
-  end
 
   M.decls():insert(M.AST.NewField(field))
 
@@ -560,15 +601,16 @@ function Field:AutoPartitionByPreimage()
   end
 end
 
--------------------------------------------------------------------------------
---[[  High-Level Loading and Dumping Operations (Lua and Terra)            ]]--
-
 function Field:Fill(val)
   if not T.luaValConformsToType(val, self._type) then
     error('Value to be loaded does not match field type', 2)
   end
   M.stmts():insert(M.AST.FillField(self, val))
 end
+
+-------------------------------------------------------------------------------
+--[[  Input/output                                                         ]]--
+-------------------------------------------------------------------------------
 
 function Relation:Dump(flds, file, ...)
   local args = terralib.newlist({...}):map(function(x)
