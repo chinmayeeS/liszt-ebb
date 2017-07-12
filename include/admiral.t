@@ -524,13 +524,6 @@ local function emitReduce(op, typ, lval, exp)
     assert(false)
 end
 
--- RG.rexpr, AST.Expression -> RG.rexpr
-local function emitIndexExpr(base, index)
-  assert(index:is(AST.Number))
-  assert(index.node_type == L.int)
-  return rexpr base[ [index.value] ] end
-end
-
 -------------------------------------------------------------------------------
 -- Relation-to-region translation
 -------------------------------------------------------------------------------
@@ -585,28 +578,6 @@ function R.Relation:indexType()
     (#dims == 3)        and int3d or
     assert(false)
 end
-
--- () -> (uint64[K] -> intKd)
-R.Relation.emitVectorToIndexType = terralib.memoize(function(self)
-  local dims = self:Dims()
-  local indexType = self:indexType()
-  local vec2idx
-  if not self:isGrid() or #dims == 1 then
-    terra vec2idx(v : uint64[1])
-      return [indexType]({__ptr = [indexType.impl_type](v[0])})
-    end
-  elseif #dims == 2 then
-    terra vec2idx(v : uint64[2])
-      return [indexType]({__ptr = [indexType.impl_type]{v[0], v[1]}})
-    end
-  elseif #dims == 3 then
-    terra vec2idx(v : uint64[3])
-      return [indexType]({__ptr = [indexType.impl_type]{v[0], v[1], v[2]}})
-    end
-  else assert(false) end
-  registerFun(vec2idx, 'vec'..tostring(#dims)..'d_to_idx')
-  return vec2idx
-end)
 
 -- () -> RG.ispace_type
 function R.Relation:indexSpaceType()
@@ -1430,11 +1401,11 @@ function AST.Call:toRExpr(ctxt)
   if self.func == L.id then
     return self.params[1]:toRExpr(ctxt)
   elseif self.func == L.xid then
-    return rexpr [self.params[1]:toRExpr(ctxt)].x end
+    return rexpr ( [int3d]([self.params[1]:toRExpr(ctxt)]) ).x end
   elseif self.func == L.yid then
-    return rexpr [self.params[1]:toRExpr(ctxt)].y end
+    return rexpr ( [int3d]([self.params[1]:toRExpr(ctxt)]) ).y end
   elseif self.func == L.zid then
-    return rexpr [self.params[1]:toRExpr(ctxt)].z end
+    return rexpr ( [int3d]([self.params[1]:toRExpr(ctxt)]) ).z end
   end
   -- Unary arithmetic function
   -- self.params[1] : AST.Expression
@@ -1495,12 +1466,18 @@ function AST.Call:toRExpr(ctxt)
   -- self.params[1] : AST.VectorLiteral
   -- self.params[2] : AST.LuaObject
   --   .node_type.value : R.Relation
-  -- TODO: Only allowing literals given directly
   if self.func == L.UNSAFE_ROW then
     local rel = self.params[2].node_type.value
-    local keyExpr = self.params[1]:toRExpr(ctxt)
-    local vec2idx = rel:emitVectorToIndexType()
-    return rexpr vec2idx(keyExpr) end
+    local vals = newlist(self.params[1].elems)
+    vals = vals:map(function(e) return e:toRExpr(ctxt) end)
+    if rel:isGrid() then
+      assert(#vals == 3)
+      return rexpr int3d{[vals[1]], [vals[2]], [vals[3]]} end
+    else
+      assert(#vals == 1)
+      local indexType = self:indexType()
+      return rexpr [indexType]([vals[1]]) end
+    end
   end
   -- Call to terra function
   -- self.params : AST.Expression*
@@ -1581,7 +1558,7 @@ function AST.FieldAccessIndex:toRExpr(ctxt)
   -- self.field : R.Field
   -- self.key   : AST.Expression
   -- self.index : AST.Expression
-  return emitIndexExpr(self.base:toRExpr(ctxt), self.index)
+  return rexpr [self.base:toRExpr(ctxt)][ [self.index:toRExpr(ctxt)] ] end
 end
 function AST.Global:toRExpr(ctxt)
   -- self.global : PRE.Global
@@ -1592,7 +1569,7 @@ end
 function AST.GlobalIndex:toRExpr(ctxt)
   -- self.index  : AST.Expression
   -- self.global : PRE.Global
-  return emitIndexExpr(ctxt.globalMap[self.global], self.index)
+  return rexpr [ctxt.globalMap[self.global]][ [self.index:toRExpr(ctxt)] ] end
 end
 function AST.LetExpr:toRExpr(ctxt)
   -- self.block       : AST.Block
@@ -1640,7 +1617,7 @@ function AST.SquareIndex:toRExpr(ctxt)
   -- self.node_type : T.Type
   -- self.base      : AST.Expression
   -- self.index     : AST.Expression
-  return emitIndexExpr(self.base:toRExpr(ctxt), self.index)
+  return rexpr [self.base:toRExpr(ctxt)][ [self.index:toRExpr(ctxt)] ] end
 end
 function AST.String:toRExpr(ctxt)
   quit(self)
@@ -1797,7 +1774,7 @@ function AST.NumericFor:toRQuote(ctxt)
   -- self.body  : AST.Block
   local i = ctxt:addLocal(self.name)
   return rquote
-    for [i] = [self.lower:toRExpr(ctxt)], [self.lower:toRExpr(ctxt)] do
+    for [i] = [self.lower:toRExpr(ctxt)], [self.upper:toRExpr(ctxt)] do
       [self.body:toRQuote(ctxt)]
     end
   end

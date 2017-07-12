@@ -272,7 +272,7 @@ function R.Relation:Width()
 end
 function R.Relation:BoundaryDepth()
   assert(self:isGrid())
-  return copy_table(self._bd_depth)
+  return copy_table(self._boundary_depth)
 end
 function R.Relation:Periodic()
   assert(self:isGrid())
