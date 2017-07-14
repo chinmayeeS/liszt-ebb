@@ -540,7 +540,7 @@ end)
 
 -- () -> RG.symbol*
 R.Relation.queues = terralib.memoize(function(self)
-  assert(self:isFlexible() and self:AutoPartitionField())
+  assert(self:isCoupled())
   local queues = newlist()
   for i = 1,#self:XferStencil() do
     queues:insert(RG.newsymbol(nil, self:Name()..'_queue_'..(i-1)))
@@ -550,7 +550,7 @@ end)
 
 -- () -> RG.symbol*
 R.Relation.qSrcParts = terralib.memoize(function(self)
-  assert(self:isFlexible() and self:AutoPartitionField())
+  assert(self:isCoupled())
   local qSrcParts = newlist()
   for i = 1,#self:XferStencil() do
     qSrcParts:insert(RG.newsymbol(nil, self:Name()..'_qSrcPart_'..(i-1)))
@@ -560,7 +560,7 @@ end)
 
 -- () -> RG.symbol*
 R.Relation.qDstParts = terralib.memoize(function(self)
-  assert(self:isFlexible() and self:AutoPartitionField())
+  assert(self:isCoupled())
   local qDstParts = newlist()
   for i = 1,#self:XferStencil() do
     qDstParts:insert(RG.newsymbol(nil, self:Name()..'_qDstPart_'..(i-1)))
@@ -570,13 +570,11 @@ end)
 
 -- () -> RG.index_type
 function R.Relation:indexType()
-  local dims = self:Dims()
-  return
-    (not self:isGrid()) and ptr   or
-    (#dims == 1)        and int1d or
-    (#dims == 2)        and int2d or
-    (#dims == 3)        and int3d or
-    assert(false)
+  if self:isPlain() or self:isCoupled() then
+    return ptr
+  elseif self:isGrid() then
+    return int3d
+  else assert(false) end
 end
 
 -- () -> RG.ispace_type
@@ -590,7 +588,7 @@ R.Relation.fieldSpace = terralib.memoize(function(self)
   for _,fld in ipairs(self:Fields()) do
     fs.entries:insert({field=fld:Name(), type=toRType(fld:Type())})
   end
-  if self:isFlexible() then
+  if self:isCoupled() then
     fs.entries:insert({field='__valid', type=bool})
   end
   if DEBUG then prettyPrintStruct(fs) end
@@ -605,18 +603,20 @@ end
 
 -- () -> terralib.array
 R.Relation.queueFieldSpace = terralib.memoize(function(self)
-  assert(self:isFlexible() and self:AutoPartitionField())
+  assert(self:isCoupled())
   return int8[terralib.sizeof(self:fieldSpace())]
 end)
 
 -- () -> RG.region_type
 function R.Relation:queueRegionType()
+  assert(self:isCoupled())
   -- Region types in signatures must be distinct, so we're not caching here.
   return region(self:indexSpaceType(), self:queueFieldSpace())
 end
 
--- () -> number
+-- () -> int
 R.Relation.validFieldOffset = terralib.memoize(function(self)
+  assert(self:isCoupled())
   -- Ask Terra the offset to the __valid field
   local terra getOffset()
     var x : self:fieldSpace()
@@ -627,50 +627,35 @@ end)
 
 -- M.ExprConst -> RG.rexpr
 function R.Relation:translateIndex(lit)
-  local dims = self:Dims()
-  local indexType = self:indexType()
-  if not self:isGrid() or #dims == 1 then
-    return rexpr [indexType]([toRConst(lit, L.int)]) end
-  elseif #dims == 2 then
-    assert(terralib.israwlist(lit))
-    assert(#lit == 2)
-    return rexpr [indexType]({ x = [toRConst(lit[1], L.int)],
-                               y = [toRConst(lit[2], L.int)]}) end
-  elseif #dims == 3 then
+  if self:isPlain() or self:isCoupled() then
+    return rexpr [ptr]([toRConst(lit, L.int)]) end
+  elseif self:isGrid() then
     assert(terralib.israwlist(lit))
     assert(#lit == 3)
-    return rexpr [indexType]({ x = [toRConst(lit[1], L.int)],
-                               y = [toRConst(lit[2], L.int)],
-                               z = [toRConst(lit[3], L.int)]}) end
+    return rexpr [int3d]({ x = [toRConst(lit[1], L.int)],
+                           y = [toRConst(lit[2], L.int)],
+                           z = [toRConst(lit[3], L.int)]}) end
   else assert(false) end
 end
 
 -- () -> int
 function R.Relation:primPartSize()
-  assert(self:isFlexible() and self:AutoPartitionField())
-  -- In this case, we make sure all sub-partitions are of the same size.
+  assert(self:isCoupled())
   return math.ceil(math.ceil(self:Size() / NUM_PRIM_PARTS) * self:MaxSkew())
 end
 
 -- () -> RG.rexpr
 function R.Relation:emitISpaceInit()
-  if RG.config['parallelize'] and self:isFlexible()
-       and self:AutoPartitionField() then
+  if self:isPlain() then
+    return rexpr ispace(ptr, [self:Size()]) end
+  elseif self:isGrid() then
+    local dims = self:Dims()
+    return rexpr
+      ispace(int3d, { x = [dims[1]], y = [dims[2]], z = [dims[3]] })
+    end
+  elseif self:isCoupled() then
     return rexpr ispace(ptr, [self:primPartSize()] * NUM_PRIM_PARTS) end
-  end
-  local dims = self:Dims()
-  local indexType = self:indexType()
-  return
-    (not self:isGrid() or #dims == 1) and rexpr
-      ispace(indexType, [dims[1]])
-    end or
-    (#dims == 2) and rexpr
-      ispace(indexType, { x = [dims[1]], y = [dims[2]] })
-    end or
-    (#dims == 3) and rexpr
-      ispace(indexType, { x = [dims[1]], y = [dims[2]], z = [dims[3]] })
-    end or
-    assert(false)
+  else assert(false) end
 end
 
 -- () -> RG.rquote
@@ -680,7 +665,7 @@ function R.Relation:emitRegionInit()
   local fspaceExpr = self:fieldSpace()
   local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
   local fillQuote = rquote end
-  if self:isFlexible() then
+  if self:isCoupled() then
     fillQuote = rquote fill(rg.__valid, false) end
   end
   return rquote
@@ -693,7 +678,45 @@ end
 function R.Relation:emitPrimPartInit()
   local r = self:regionSymbol()
   local p = self:primPartSymbol()
-  if self:isFlexible() and self:AutoPartitionField() then
+  if self:isPlain() then
+    assert(self:Size() % NUM_PRIM_PARTS == 0)
+    return rquote
+      var [p] = partition(equal, r, [A.primColors()])
+    end
+  elseif self:isGrid() then
+    -- Check for exact partitioning of grid interior
+    local bd = self:BoundaryDepth()
+    local dims = self:Dims()
+    assert((dims[1] - 2 * bd[1]) % NX == 0)
+    assert((dims[2] - 2 * bd[2]) % NY == 0)
+    assert((dims[3] - 2 * bd[3]) % NZ == 0)
+    local tileSizeX = (dims[1] - 2 * bd[1]) / NX
+    local tileSizeY = (dims[2] - 2 * bd[2]) / NY
+    local tileSizeZ = (dims[3] - 2 * bd[3]) / NZ
+    -- Partition interior equally, then add boundaries
+    return rquote
+      var coloring = RG.c.legion_domain_point_coloring_create()
+      for c in [A.primColors()] do
+        var rect = rect3d{
+          lo = int3d{ x = [bd[1]] + tileSizeX * c.x,
+                      y = [bd[2]] + tileSizeY * c.y,
+                      z = [bd[3]] + tileSizeZ * c.z },
+          hi = int3d{ x = [bd[1]] + tileSizeX * (c.x+1) - 1,
+                      y = [bd[2]] + tileSizeY * (c.y+1) - 1,
+                      z = [bd[3]] + tileSizeZ * (c.z+1) - 1 }
+        }
+        if c.x == 0    then rect.lo.x -= [bd[1]] end
+        if c.x == NX-1 then rect.hi.x += [bd[1]] end
+        if c.y == 0    then rect.lo.y -= [bd[2]] end
+        if c.y == NY-1 then rect.hi.y += [bd[2]] end
+        if c.z == 0    then rect.lo.z -= [bd[3]] end
+        if c.z == NZ-1 then rect.hi.z += [bd[3]] end
+        RG.c.legion_domain_point_coloring_color_domain(coloring, c, rect)
+      end
+      var [p] = partition(disjoint, r, coloring, [A.primColors()])
+      RG.c.legion_domain_point_coloring_destroy(coloring)
+    end
+  elseif self:isCoupled() then
     local primPartSize = self:primPartSize()
     return rquote
       var coloring = RG.c.legion_point_coloring_create()
@@ -715,28 +738,30 @@ function R.Relation:emitPrimPartInit()
       var [p] = partition(disjoint, r, coloring, [A.primColors()])
       RG.c.legion_point_coloring_destroy(coloring)
     end
-  end
-  return rquote
-    var [p] = partition(equal, r, [A.primColors()])
-  end
+  else assert(false) end
 end
 
 -- () -> RG.task
 R.Relation.emitElemColor = terralib.memoize(function(self)
-  local dims = self:Dims()
   local elemColor
-  if self:isGrid() and #dims == 3 then
-    -- HACK: Reverse engineering the compiler's partioning scheme.
+  if self:isGrid() then
+    local bd = self:BoundaryDepth()
+    local dims = self:Dims()
+    local tileSizeX = (dims[1] - 2 * bd[1]) / NX
+    local tileSizeY = (dims[2] - 2 * bd[2]) / NY
+    local tileSizeZ = (dims[3] - 2 * bd[3]) / NZ
     __demand(__inline) task elemColor(idx : int3d)
-      var blockSizeX = ([dims[1]] + NX - 1) / NX
-      var blockSizeY = ([dims[2]] + NY - 1) / NY
-      var blockSizeZ = ([dims[3]] + NZ - 1) / NZ
-      return int3d{idx.x / blockSizeX, idx.y / blockSizeY, idx.z / blockSizeZ}
+      idx.x = min( max( idx.x, [bd[1]] ), [dims[1]] + [bd[1]] - 1 )
+      idx.y = min( max( idx.y, [bd[2]] ), [dims[2]] + [bd[2]] - 1 )
+      idx.z = min( max( idx.z, [bd[3]] ), [dims[3]] + [bd[3]] - 1 )
+      return int3d{ (idx.x - [bd[1]]) / tileSizeX,
+                    (idx.y - [bd[2]]) / tileSizeY,
+                    (idx.z - [bd[3]]) / tileSizeZ }
     end
   else
-    -- TODO: Not covered: Non-3D grids, plain and flexible relations. The last
-    -- two follow a different partitioning scheme, and may also require the
-    -- base region to calculate offsets.
+    -- TODO: Not covered: plain and coupled relations. These follow a
+    -- different partitioning scheme, and may also require the base region to
+    -- calculate offsets.
     assert(false)
   end
   registerTask(elemColor, self:Name()..'_elemColor')
@@ -745,7 +770,7 @@ end)
 
 -- int -> RG.rquote
 function R.Relation:emitQueueInit(i)
-  assert(self:isFlexible() and self:AutoPartitionField())
+  assert(self:isCoupled())
   local q = self:queues()[i]
   local size = self:MaxXferNum() * NUM_PRIM_PARTS
   local fspaceExpr = self:queueFieldSpace()
@@ -756,7 +781,7 @@ end
 
 -- int -> RG.rquote
 function R.Relation:emitQueuePartInit(i)
-  assert(self:isFlexible() and self:AutoPartitionField())
+  assert(self:isCoupled())
   local q = self:queues()[i]
   local qSrcPart = self:qSrcParts()[i]
   local qDstPart = self:qDstParts()[i]
@@ -782,7 +807,6 @@ function R.Relation:emitQueuePartInit(i)
     end
     var [qSrcPart] = partition(disjoint, q, srcColoring, colors)
     RG.c.legion_point_coloring_destroy(srcColoring)
-
     var dstColoring = RG.c.legion_point_coloring_create()
     var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
     for c in colors do
@@ -803,10 +827,10 @@ end
 
 -- () -> RG.task
 R.Relation.emitPushAll = terralib.memoize(function(self)
-  local autoPartFld = self:AutoPartitionField()
-  assert(self:isFlexible() and autoPartFld)
+  assert(self:isCoupled())
+  local couplingFld = self:CouplingField()
   -- utilized sub-tasks
-  local rngElemColor = autoPartFld:Type().relation:emitElemColor()
+  local rngElemColor = couplingFld:Type().relation:emitElemColor()
   -- code elements to fill in
   local qs = newlist() -- RG.symbol*
   local privileges = newlist() -- RG.privilege*
@@ -873,7 +897,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     [queueInits]
     for [rPtr] in r do
       if rPtr.__valid then
-        var [elemColor] = rngElemColor(rPtr.[autoPartFld:Name()])
+        var [elemColor] = rngElemColor(rPtr.[couplingFld:Name()])
         if elemColor ~= partColor then
           [moveChecks]
           RG.assert(not rPtr.__valid, 'Element moved past predicted stencil')
@@ -887,7 +911,7 @@ end)
 
 -- () -> RG.task
 R.Relation.emitPullAll = terralib.memoize(function(self)
-  assert(self:isFlexible() and self:AutoPartitionField())
+  assert(self:isCoupled())
   local queues = newlist() -- RG.symbol*
   local privileges = newlist() -- RG.privilege*
   for i = 1,#self:XferStencil() do
@@ -926,51 +950,42 @@ end)
 
 -- () -> RG.rquote
 function R.Relation:emitPrimPartUpdate()
-  local fld = assert(self:AutoPartitionField())
-  if self:isFlexible() then
-    local pushAll = self:emitPushAll()
-    local pullAll = self:emitPullAll()
-    return rquote
-      for c in [A.primColors()] do
-        pushAll(c, [self:primPartSymbol()][c],
-                [self:qSrcParts():map(function(qSrcPart)
-                  return rexpr qSrcPart[c] end
-                end)])
-      end
-      for c in [A.primColors()] do
-        pullAll(c, [self:primPartSymbol()][c],
-                [self:qDstParts():map(function(qDstPart)
-                  return rexpr qDstPart[c] end
-                end)])
-      end
-      -- TODO: Check that all out-queues have been emptied out.
+  assert(self:isCoupled())
+  local pushAll = self:emitPushAll()
+  local pullAll = self:emitPullAll()
+  return rquote
+    for c in [A.primColors()] do
+      pushAll(c, [self:primPartSymbol()][c],
+              [self:qSrcParts():map(function(qSrcPart)
+                return rexpr qSrcPart[c] end
+              end)])
     end
-  else
-    local domRg = self:regionSymbol()
-    local domPart = self:primPartSymbol()
-    local rngPart = fld:Type().relation:primPartSymbol()
-    return rquote
-      domPart = preimage(domRg, rngPart, domRg.[fld:Name()])
+    for c in [A.primColors()] do
+      pullAll(c, [self:primPartSymbol()][c],
+              [self:qDstParts():map(function(qDstPart)
+                return rexpr qDstPart[c] end
+              end)])
     end
+    -- TODO: Check that all out-queues have been emptied out.
   end
 end
 
 -- () -> RG.rquote
 function R.Relation:emitPrimPartCheck()
-  assert(self:isFlexible())
-  local autoPartFld = assert(self:AutoPartitionField())
+  assert(self:isCoupled())
+  local couplingFld = self:CouplingField()
   local domPart = self:primPartSymbol()
-  local rngPart = autoPartFld:Type().relation:primPartSymbol()
+  local rngPart = couplingFld:Type().relation:primPartSymbol()
   return rquote
     for c in [A.primColors()] do
       for x in [domPart][c] do
         if x.__valid then
-          -- TODO: This membership check is inefficient; we should do the
-          -- original partitioning manually, so we know the exact limits of the
+          -- TODO: This membership check is inefficient; we do the original
+          -- partitioning manually, so we know the exact limits of the
           -- sub-partitions.
           var found = false
           for y in [rngPart][c] do
-            if x.[autoPartFld:Name()] == y then
+            if x.[couplingFld:Name()] == y then
               found = true
               break
             end
@@ -1082,7 +1097,7 @@ function FunContext.New(info, argNames, argTypes)
     self.privileges:insert(RG.privilege(RG.writes, rg, '__valid'))
   end
   -- Privileges for accessing translator-added flags
-  if info.domainRel and info.domainRel:isFlexible() then
+  if info.domainRel and info.domainRel:isCoupled() then
     local rg = assert(self.relMap[info.domainRel])
     self.privileges:insert(RG.privilege(RG.reads, rg, '__valid'))
   end
@@ -1159,7 +1174,7 @@ function AST.UserFunction:toTask(info)
   local block = self.body:toRQuote(ctxt)
   if info.domainRel then
     local loopVar = ctxt.args[1]
-    if info.domainRel:isFlexible() then
+    if info.domainRel:isCoupled() then
       local rel = ctxt.relMap[info.domainRel]
       block = rquote if [rel][loopVar].__valid then [block] end end
     end
@@ -1183,11 +1198,7 @@ function AST.UserFunction:toTask(info)
   if info.domainRel then
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
-    if not RG.config['parallelize'] then
-      task tsk([ctxt:signature()]) where
-        dom <= univ, [ctxt.privileges]
-      do [body] end
-    elseif not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
+    if not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
       -- HACK: Need to manually parallelize insertion kernels.
       -- TODO: Only handling the simple case of functions without stencils,
       -- which don't require any changes.
@@ -1353,41 +1364,29 @@ function AST.Call:toRExpr(ctxt)
   -- self.params[3] : AST.Expression
   if self.func == L.Affine then
     local rel = self.params[1].node_type.value
+    assert(rel:isGrid())
     local dims = rel:Dims()
     -- TODO: The translated expression for self.params[3] is duplicated.
     assert(self.params[2].m == self.params[2].n + 1)
-    local N = self.params[2].n
+    assert(self.params[2].n == 3)
     local mat = self.params[2].matvals
     -- Only allowing diagonal translation matrices.
-    for i=1,N do for j=1,N do
+    for i=1,3 do for j=1,3 do
       assert(i == j and mat[i][j] == 1 or
              i ~= j and mat[i][j] == 0)
     end end
     local base = self.params[3]:toRExpr(ctxt)
-    if N == 2 then
-      local x = mat[1][3]
-      local y = mat[2][3]
-      if x == 0 and y == 0 then
-        return base
-      end
-      return rexpr (base + {x,y}) %
-        rect2d{
-          lo = int2d{ x = 0,           y = 0           },
-          hi = int2d{ x = [dims[1]-1], y = [dims[2]-1] } }
-      end
-    elseif N == 3 then
-      local x = mat[1][4]
-      local y = mat[2][4]
-      local z = mat[3][4]
-      if x == 0 and y == 0 and z == 0 then
-        return base
-      end
-      return rexpr (base + {x,y,z}) %
-        rect3d{
-          lo = int3d{ x = 0,           y = 0,           z = 0           },
-          hi = int3d{ x = [dims[1]-1], y = [dims[2]-1], z = [dims[3]-1] } }
-      end
-    else assert(false) end
+    local x = mat[1][4]
+    local y = mat[2][4]
+    local z = mat[3][4]
+    if x == 0 and y == 0 and z == 0 then
+      return base
+    end
+    return rexpr (base + {x,y,z}) %
+      rect3d{
+        lo = int3d{ x = 0,           y = 0,           z = 0           },
+        hi = int3d{ x = [dims[1]-1], y = [dims[2]-1], z = [dims[3]-1] } }
+    end
   end
   -- Assertion
   -- self.params[1] : AST.Expression
@@ -1472,11 +1471,10 @@ function AST.Call:toRExpr(ctxt)
     vals = vals:map(function(e) return e:toRExpr(ctxt) end)
     if rel:isGrid() then
       assert(#vals == 3)
-      return rexpr int3d{[vals[1]], [vals[2]], [vals[3]]} end
+      return rexpr int3d{ [vals[1]], [vals[2]], [vals[3]] } end
     else
       assert(#vals == 1)
-      local indexType = self:indexType()
-      return rexpr [indexType]([vals[1]]) end
+      return rexpr [ptr]([vals[1]]) end
     end
   end
   -- Call to terra function
@@ -1811,9 +1809,8 @@ if USE_HDF then
   -- TODO: Not caching the generated tasks.
   function R.Relation:emitDump(flds)
     local flds = flds:copy()
-    if self:isFlexible() then
-      local autoPartFld = self:AutoPartitionField()
-      assert(not autoPartFld or flds:find(autoPartFld:Name()))
+    if self:isCoupled() then
+      assert(flds:find(self:CouplingField():Name()))
       flds:insert('__valid')
     end
     local dims = self:Dims()
@@ -1828,11 +1825,6 @@ if USE_HDF then
         if #dims == 1 then
           emit quote
             sizes[0] = [dims[1]]
-          end
-        elseif #dims == 2 then
-          emit quote
-            sizes[0] = [dims[1]]
-            sizes[1] = [dims[2]]
           end
         elseif #dims == 3 then
           emit quote
@@ -1932,9 +1924,8 @@ if USE_HDF then
   -- TODO: Not caching the generated tasks.
   function R.Relation:emitLoad(flds)
     local flds = flds:copy()
-    if self:isFlexible() then
-      local autoPartFld = self:AutoPartitionField()
-      assert(not autoPartFld or flds:find(autoPartFld:Name()))
+    if self:isCoupled() then
+      assert(flds:find(self:CouplingField():Name()))
       flds:insert('__valid')
     end
     local isType = self:indexSpaceType()
@@ -1977,8 +1968,7 @@ function M.AST.ForEach:toRQuote()
   -- Collect arguments for call
   local actualArgs = newlist()
   local c = RG.newsymbol(nil, 'c')
-  if RG.config['parallelize'] and not (isEmpty(info.inserts) and
-                                       isEmpty(info.deletes)) then
+  if not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
     -- HACK: Need to manually parallelize insertion kernels.
     assert(not self.subset)
     actualArgs:insert(rexpr [self.rel:primPartSymbol()][c] end)
@@ -2010,8 +2000,7 @@ function M.AST.ForEach:toRQuote()
       (op == 'min') and rquote [retSym] min= [callExpr]     end or
       assert(false)
   end
-  if RG.config['parallelize'] and not (isEmpty(info.inserts) and
-                                       isEmpty(info.deletes)) then
+  if not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
     -- HACK: Need to manually parallelize insertion kernels.
     callQuote = rquote
       for [c] in [A.primColors()] do
@@ -2021,8 +2010,8 @@ function M.AST.ForEach:toRQuote()
   end
   -- Update primary partitioning (if appropriate)
   local primPartQuote = rquote end
-  if RG.config['parallelize'] then
-    local pt = info.field_use[self.rel:AutoPartitionField()]
+  if self.rel:isCoupled() then
+    local pt = info.field_use[self.rel:CouplingField()]
     if pt and pt.write then
       primPartQuote = self.rel:emitPrimPartUpdate()
     end
@@ -2118,14 +2107,8 @@ function M.AST.Load:toRQuote()
   local relSym = self.rel:regionSymbol()
   local valRExprs = self.vals:map(function(v) return v:toRExpr() end)
   local primPartQuote = rquote end
-  if RG.config['parallelize'] then
-    if self.flds:find(self.rel:AutoPartitionField()) then
-      if self:isFlexible() then
-        primPartQuote = self.rel:emitPrimPartCheck()
-      else
-        primPartQuote = self.rel:emitPrimPartUpdate()
-      end
-    end
+  if self.rel:isCoupled() then
+    primPartQuote = self.rel:emitPrimPartCheck()
   end
   return rquote
     var filename = [rawstring](C.malloc(256))
@@ -2201,18 +2184,12 @@ end
 -- M.AST.FillField -> RG.rquote*
 local function emitFillTaskCalls(fillStmts)
   local fillsPerRelation = {} -- map(R.Relation,M.AST.FillField)
-  local mustUpdatePrimPart = {} -- set(R.Relation)
   for _,fill in ipairs(fillStmts) do
     local rel = fill.fld:Relation()
     local stmts = fillsPerRelation[rel] or newlist()
     stmts:insert(fill)
     fillsPerRelation[rel] = stmts
-    if RG.config['parallelize'] then
-      if fill.fld == rel:AutoPartitionField() then
-        assert(not rel:isFlexible())
-        mustUpdatePrimPart[rel] = true
-      end
-    end
+    assert(not (rel:isCoupled() and fill.fld == rel:CouplingField()))
   end
   local fillTasks = {} -- map(R.Relation,RG.task)
   for rel,fills in pairs(fillsPerRelation) do
@@ -2221,7 +2198,7 @@ local function emitFillTaskCalls(fillStmts)
     privileges:insert(RG.privilege(RG.reads, arg))
     privileges:insert(RG.privilege(RG.writes, arg))
     local body
-    if not rel:isFlexible() and RG.config['openmp'] then
+    if not rel:isCoupled() and RG.config['openmp'] then
       body = fills:map(function(fill) return rquote
         __demand(__openmp)
         for e in arg do
@@ -2235,7 +2212,6 @@ local function emitFillTaskCalls(fillStmts)
         end
       end end)
     end
-
     local tsk
     if RG.check_cuda_available() then
       __demand(__parallel, __cuda)
@@ -2254,9 +2230,6 @@ local function emitFillTaskCalls(fillStmts)
   local calls = newlist() -- RG.rquote*
   for rel,tsk in pairs(fillTasks) do
     calls:insert(rquote [tsk]([rel:regionSymbol()]) end)
-    if mustUpdatePrimPart[rel] then
-      calls:insert(rel:emitPrimPartUpdate())
-    end
   end
   return calls
 end
@@ -2313,11 +2286,6 @@ function A.translateAndRun(mapper_registration, link_flags)
           (#rect == 1) and rexpr
             rect1d{ lo = [rect[1][1]], hi = [rect[1][2]] }
           end or
-          (#rect == 2) and rexpr
-            rect2d{
-              lo = int2d{ x = [rect[1][1]], y = [rect[2][1]] },
-              hi = int2d{ x = [rect[1][2]], y = [rect[2][2]] }}
-          end or
           (#rect == 3) and rexpr
             rect3d{
               lo = int3d{ x=[rect[1][1]], y=[rect[2][1]], z=[rect[3][1]] },
@@ -2344,18 +2312,16 @@ function A.translateAndRun(mapper_registration, link_flags)
     end
   end
   -- Emit primary partitioning scheme
-  if RG.config['parallelize'] then
-    header:insert(rquote
-      var [A.primColors()] = ispace(int3d, {NX,NY,NZ})
-    end)
-    for _,rel in ipairs(rels) do
-      header:insert(rel:emitPrimPartInit())
-      -- Emit transfer queues for auto-partitioned flexible relations
-      if rel:isFlexible() and rel:AutoPartitionField() then
-        for i = 1,#rel:XferStencil() do
-          header:insert(rel:emitQueueInit(i))
-          header:insert(rel:emitQueuePartInit(i))
-        end
+  header:insert(rquote
+    var [A.primColors()] = ispace(int3d, {NX,NY,NZ})
+  end)
+  for _,rel in ipairs(rels) do
+    header:insert(rel:emitPrimPartInit())
+    -- Emit transfer queues for coupled relations
+    if rel:isCoupled() then
+      for i = 1,#rel:XferStencil() do
+        header:insert(rel:emitQueueInit(i))
+        header:insert(rel:emitQueuePartInit(i))
       end
     end
   end
@@ -2374,33 +2340,25 @@ function A.translateAndRun(mapper_registration, link_flags)
     end
   end
   -- Synthesize main task
-  local main
-  if RG.config['parallelize'] then
-    local opts = newlist() -- RG.rexpr*
-    opts:insertall(rels:map(function(rel) return rel:primPartSymbol() end))
-    opts:insert(A.primColors())
-    for _,domRel in ipairs(rels) do
-      local autoPartFld = domRel:AutoPartitionField()
-      if domRel:isFlexible() and autoPartFld then
-        local rngRel = autoPartFld:Type().relation
-        local domRg = domRel:regionSymbol()
-        local domPart = domRel:primPartSymbol()
-        local rngRg = rngRel:regionSymbol()
-        local rngPart = rngRel:primPartSymbol()
-        opts:insert(rexpr
-          image(rngRg, domPart, domRg.[autoPartFld:Name()]) <= rngPart
-        end)
-      end
+  local opts = newlist() -- RG.rexpr*
+  opts:insertall(rels:map(function(rel) return rel:primPartSymbol() end))
+  opts:insert(A.primColors())
+  for _,domRel in ipairs(rels) do
+    if domRel:isCoupled() then
+      local couplingFld = domRel:CouplingField()
+      local rngRel = couplingFld:Type().relation
+      local domRg = domRel:regionSymbol()
+      local domPart = domRel:primPartSymbol()
+      local rngRg = rngRel:regionSymbol()
+      local rngPart = rngRel:primPartSymbol()
+      opts:insert(rexpr
+        image(rngRg, domPart, domRg.[couplingFld:Name()]) <= rngPart
+      end)
     end
-    task main()
-      [header]
-      __parallelize_with [opts] do [body] end
-    end
-  else
-    task main()
-      [header];
-      [body]
-    end
+  end
+  local task main()
+    [header]
+    __parallelize_with [opts] do [body] end
   end
   registerTask(main, 'main')
   -- Emit to executable or run

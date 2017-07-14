@@ -254,13 +254,13 @@ function Context:loginsert(relation, node)
     self:error(node, 'Cannot insert into relation '..relation:Name()..' twice')
   end
 
-  -- check that the auto-partition field is set through a centered access
-  local autoPartFld = relation:AutoPartitionField()
-  if autoPartFld then
+  -- check that the coupling field is set through a centered access
+  if relation:isCoupled() then
+    local couplingFld = relation:CouplingField()
     for i,name in ipairs(node.record.names) do
-      if name == autoPartFld:Name() then
+      if name == couplingFld:Name() then
         if not node.record.exprs[i].is_centered then
-          self:error(node, 'Auto-partition field "'..name..'" must be set '..
+          self:error(node, 'Coupling field "'..name..'" must be set '..
                            'through a centered access')
         end
       end

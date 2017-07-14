@@ -91,15 +91,15 @@ R.is_subset       = is_subset
 -- A Relation must be in one of the following MODES:
 --    PLAIN
 --    GRID
---    FLEXIBLE
+--    COUPLED
 function Relation:isPlain()       return self._mode == 'PLAIN'      end
 function Relation:isGrid()        return self._mode == 'GRID'       end
-function Relation:isFlexible()    return self._mode == 'FLEXIBLE'   end
+function Relation:isCoupled()     return self._mode == 'COUPLED'    end
 
 local errorMsg = [[NewRelation must be called as follows:
 local myrel = L.NewRelation {
   name = string,
-  mode = 'PLAIN' | 'GRID' | 'FLEXIBLE',
+  mode = 'PLAIN' | 'GRID' | 'COUPLED',
   --------------------------------------------------------------------------
   -- if mode == 'PLAIN':
   --------------------------------------------------------------------------
@@ -115,9 +115,11 @@ local myrel = L.NewRelation {
   [periodic = {bool,bool,bool},] -- use periodic boundary conditions
                                  -- (default: {false,false,false})
   --------------------------------------------------------------------------
-  -- if mode == 'FLEXIBLE':
+  -- if mode == 'COUPLED':
   --------------------------------------------------------------------------
   size = 100,
+  coupled_with = other_relation,
+  coupling_field = 'fld_name',
   max_skew = 3.0,
   max_xfer_num = 10,
   xfer_stencil = {{0,0,1},{0,0,-1},...},
@@ -132,7 +134,7 @@ function R.NewRelation(params)
       is_valid_lua_identifier(params.name) and
       (params.mode == 'PLAIN' or
        params.mode == 'GRID' or
-       params.mode == 'FLEXIBLE')
+       params.mode == 'COUPLED')
     if params.mode == 'PLAIN' then
       check = check and
         is_int(params.size)
@@ -160,9 +162,11 @@ function R.NewRelation(params)
           not (pb[2] and bd[2] ~= 0) and
           not (pb[3] and bd[3] ~= 0)
       end
-    elseif params.mode == 'FLEXIBLE' then
+    elseif params.mode == 'COUPLED' then
       check = check and
         is_int(params.size) and
+        is_relation(params.coupled_with) and
+        is_valid_lua_identifier(params.coupling_field) and
         is_num(params.max_skew) and
         is_int(params.max_xfer_num) and
         terralib.israwlist(params.xfer_stencil) and
@@ -179,7 +183,6 @@ function R.NewRelation(params)
     _name       = params.name,
     _mode       = params.mode,
     _uid        = relation_uid,
-
     _fields     = terralib.newlist(),
     _divisions  = terralib.newlist(),
     _macros     = terralib.newlist(),
@@ -194,7 +197,7 @@ function R.NewRelation(params)
     size = params.size
   elseif params.mode == 'GRID' then
     -- size calculation
-    size = 1
+    size = params.dims[1] * params.dims[2] * params.dims[3]
     -- defaults
     local bd_depth = params.boundary_depth or {1, 1, 1}
     local periodic = params.periodic       or {false, false, false}
@@ -204,16 +207,17 @@ function R.NewRelation(params)
     rawset(rel, '_width',          copy_table(params.width))
     rawset(rel, '_boundary_depth', copy_table(bd_depth))
     rawset(rel, '_periodic',       copy_table(periodic))
-  elseif params.mode == 'FLEXIBLE' then
+  elseif params.mode == 'COUPLED' then
     -- size calculation
     size = params.size
     -- mode-dependent values
-    rawset(rel, '_auto_part_fld', nil)
+    rawset(rel, '_coupling_field',
+           rel:NewField(params.coupling_field, params.coupled_with))
     rawset(rel, '_max_skew', params.max_skew)
     rawset(rel, '_max_xfer_num', params.max_xfer_num)
     rawset(rel, '_xfer_stencil', terralib.newlist(params.xfer_stencil))
   else assert(false) end
-  rawset(rel, '_logical_size',  size)
+  rawset(rel, '_size',  size)
 
   -- register & return the relation
   M.decls():insert(M.AST.NewRelation(rel))
@@ -223,24 +227,30 @@ end
 function Relation:_INTERNAL_UID()
   return self._uid
 end
+
 function Relation:Name()
   return self._name
 end
+
 function Relation:Mode()
   return self._mode
 end
+
 function Relation:Size()
-  return self._logical_size
+  return self._size
 end
+
 function Relation:Dims()
   if not self:isGrid() then
     return { self:Size() }
   end
   return copy_table(self._dims)
 end
+
 function Relation:Fields()
   return self._fields
 end
+
 function Relation:Divisions()
   return self._divisions
 end
@@ -266,18 +276,22 @@ function R.Relation:Origin()
   assert(self:isGrid())
   return copy_table(self._origin)
 end
+
 function R.Relation:Width()
   assert(self:isGrid())
   return copy_table(self._width)
 end
+
 function R.Relation:BoundaryDepth()
   assert(self:isGrid())
   return copy_table(self._boundary_depth)
 end
+
 function R.Relation:Periodic()
   assert(self:isGrid())
   return copy_table(self._periodic)
 end
+
 function R.Relation:CellWidth()
   assert(self:isGrid())
   return { self._width[1] / (1.0 * self._dims[1]),
@@ -286,26 +300,26 @@ function R.Relation:CellWidth()
 end
 
 -------------------------------------------------------------------------------
---[[  Flexible relations                                                   ]]--
+--[[  Coupled relations                                                    ]]--
 -------------------------------------------------------------------------------
 
-function Relation:AutoPartitionField()
-  -- assert(self:isFlexible())
-  return self._auto_part_fld
+function Relation:CouplingField()
+  assert(self:isCoupled())
+  return self._coupling_field
 end
 
 function Relation:MaxSkew()
-  assert(self:isFlexible())
+  assert(self:isCoupled())
   return self._max_skew
 end
 
 function Relation:MaxXferNum()
-  assert(self:isFlexible())
+  assert(self:isCoupled())
   return self._max_xfer_num
 end
 
 function Relation:XferStencil()
-  assert(self:isFlexible())
+  assert(self:isCoupled())
   return self._xfer_stencil
 end
 
@@ -558,8 +572,8 @@ function Relation:NewField(name, typ)
     error("NewField() expects an Ebb type or "..
           "relation as the 2nd argument", 2)
   end
-  if typ:iskey() and typ.relation:isFlexible() then
-    error("Foreign keys to flexible relations are not allowed", 2)
+  if typ:iskey() and typ.relation:isCoupled() then
+    error("Foreign keys to coupled relations are not allowed", 2)
   end
 
   -- create the field
@@ -575,30 +589,6 @@ function Relation:NewField(name, typ)
   M.decls():insert(M.AST.NewField(field))
 
   return field
-end
-
-function Field:AutoPartitionByPreimage()
-  if self._owner:isGrid() then
-    error("Auto-partitioning not supported for grid-typed relations", 2)
-  end
-  if not self._type:iskey() then
-    error("Preimage auto-partitioning requires a key-typed field", 2)
-  end
-  rawset(self._owner, '_auto_part_fld', self)
-  -- check for cycles
-  local visited = {} -- set(Relation)
-  local rel = self._owner
-  while true do
-    if visited[rel] then
-      error("Detected cycle in auto-partition directives", 2)
-    end
-    visited[rel] = true
-    if rel._auto_part_fld then
-      rel = rel._auto_part_fld:Type().relation
-    else
-      break
-    end
-  end
 end
 
 function Field:Fill(val)

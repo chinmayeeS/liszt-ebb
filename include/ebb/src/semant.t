@@ -636,8 +636,8 @@ function ast.InsertStatement:check(ctxt)
     ctxt:error(self,"Expected a relation to insert into")
     return insert
   end
-  if not rel:isFlexible() then
-    ctxt:error(self, 'Can only insert into flexible relations.')
+  if not rel:isCoupled() then
+    ctxt:error(self, 'Can only insert into coupled relations.')
     return insert
   end
   -- check record child
@@ -668,11 +668,11 @@ function ast.InsertStatement:check(ctxt)
     rectyp_proto[name]  = exp.node_type
     insert.fieldindex[field] = i
   end
-  local autoPartFld = rel:AutoPartitionField()
-  if autoPartFld and not insert.fieldindex[autoPartFld] then
+  local couplingFld = rel:CouplingField()
+  if not insert.fieldindex[couplingFld] then
     ctxt:error(self, "Insert statements on relation "..rel:Name()..
-                     " must include the relation's auto-partition field "..
-                     autoPartFld:Name())
+                     " must include the relation's coupling field "..
+                     couplingFld:Name())
   end
 
   -- save record type
@@ -694,8 +694,8 @@ function ast.DeleteStatement:check(ctxt)
     ctxt:error(self,"Only centered keys may be deleted")
     return delete
   end
-  if not keytyp.relation:isFlexible() then
-    ctxt:error(self, 'Can only delete from flexible relations.')
+  if not keytyp.relation:isCoupled() then
+    ctxt:error(self, 'Can only delete from coupled relations.')
     return delete
   end
 

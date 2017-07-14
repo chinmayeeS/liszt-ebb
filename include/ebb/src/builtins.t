@@ -93,8 +93,8 @@ function B.id.check(ast, ctxt)
                         "try using xid(), yid() or zid() instead.")
         return errorT
     end
-    if args[1].node_type.relation:isFlexible() then
-        ctxt:error(ast, "Can't access the id() of a flexible relation.")
+    if args[1].node_type.relation:isCoupled() then
+        ctxt:error(ast, "Can't access the id() of a coupled relation.")
         return errorT
     end
 
@@ -254,8 +254,8 @@ function B.UNSAFE_ROW.check(ast, ctxt)
         return errorT
     end
     local rel = rel_type.value
-    if rel:isFlexible() then
-        ctxt:error(ast, "UNSAFE_ROW can't be used for flexible relations.")
+    if rel:isCoupled() then
+        ctxt:error(ast, "UNSAFE_ROW can't be used for coupled relations.")
         return errorT
     end
     local ndim = #rel:Dims()
