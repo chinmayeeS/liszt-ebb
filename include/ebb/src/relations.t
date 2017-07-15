@@ -202,11 +202,12 @@ function R.NewRelation(params)
     local bd_depth = params.boundary_depth or {1, 1, 1}
     local periodic = params.periodic       or {false, false, false}
     -- mode-dependent values
-    rawset(rel, '_dims',           copy_table(params.dims))
-    rawset(rel, '_origin',         copy_table(params.origin))
-    rawset(rel, '_width',          copy_table(params.width))
-    rawset(rel, '_boundary_depth', copy_table(bd_depth))
-    rawset(rel, '_periodic',       copy_table(periodic))
+    rawset(rel, '_dims',              copy_table(params.dims))
+    rawset(rel, '_origin',            copy_table(params.origin))
+    rawset(rel, '_width',             copy_table(params.width))
+    rawset(rel, '_boundary_depth',    copy_table(bd_depth))
+    rawset(rel, '_periodic',          copy_table(periodic))
+    rawset(rel, '_coarsening_fields', terralib.newlist())
   elseif params.mode == 'COUPLED' then
     -- size calculation
     size = params.size
@@ -297,6 +298,11 @@ function R.Relation:CellWidth()
   return { self._width[1] / (1.0 * self._dims[1]),
            self._width[2] / (1.0 * self._dims[2]),
            self._width[3] / (1.0 * self._dims[3]) }
+end
+
+function R.Relation:CoarseningFields()
+  assert(self:isGrid())
+  return copy_table(self._coarsening_fields)
 end
 
 -------------------------------------------------------------------------------

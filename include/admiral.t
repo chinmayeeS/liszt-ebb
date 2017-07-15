@@ -2354,16 +2354,23 @@ function A.translateAndRun(mapper_registration, link_flags)
   opts:insertall(rels:map(function(rel) return rel:primPartSymbol() end))
   opts:insert(A.primColors())
   for _,domRel in ipairs(rels) do
-    if domRel:isCoupled() then
-      local couplingFld = domRel:CouplingField()
-      local rngRel = couplingFld:Type().relation
+    local function recordSubsumption(connFld)
+      local rngRel = connFld:Type().relation
       local domRg = domRel:regionSymbol()
       local domPart = domRel:primPartSymbol()
       local rngRg = rngRel:regionSymbol()
       local rngPart = rngRel:primPartSymbol()
       opts:insert(rexpr
-        image(rngRg, domPart, domRg.[couplingFld:Name()]) <= rngPart
+        image(rngRg, domPart, domRg.[connFld:Name()]) <= rngPart
       end)
+    end
+    if domRel:isCoupled() then
+      recordSubsumption(domRel:CouplingField())
+    end
+    if domRel:isGrid() then
+      for _,fld in domRel:CoarseningFields() do
+        recordSubsumption(fld)
+      end
     end
   end
   local task main()

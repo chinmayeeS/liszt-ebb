@@ -136,3 +136,97 @@ function Grid.NewGrid(params)
   addHelpers(grid)
   return grid
 end
+
+-------------------------------------------------------------------------------
+
+-- string, int[3], int[3] -> R.Relation
+function R.Relation:Coarsen(coarseName, factor, coarseBoundaryDepth)
+  assert(self:isGrid())
+  local fine = self
+
+  -- Check inputs
+  local cbd = coarseBoundaryDepth
+  local function isInt(n) return type(n) == 'number' and n == math.floor(n) end
+  local function isPosInt(n) return isInt(n) and n > 0 end
+  local function isNonNegInt(n) return isInt(n) and n >= 0 end
+  local check =
+    type(coarseName) == 'string'
+    and terralib.israwlist(factor) and #factor == 3
+    and isPosInt(factor[1]) and isPosInt(factor[2]) and isPosInt(factor[3])
+    and terralib.israwlist(cbd) and #cbd == 3
+    and isNonNegInt(cbd[1]) and isNonNegInt(cbd[2]) and isNonNegInt(cbd[3])
+  if not check then
+    error("Bad arguments to 'coarsen'")
+  end
+
+  -- Fine grid values (including boundary)
+  local fDims   = fine:Dims()
+  local fOrigin = fine:Origin()
+  local fWidth  = fine:Width()
+  local fbd     = fine:BoundaryDepth()
+  local fcw     = { fWidth[1] / fDims[1], -- cell width
+                    fWidth[2] / fDims[2],
+                    fWidth[3] / fDims[3] }
+
+  -- Inner grid values
+  local fInnerDims  = { fDims[1] - 2 * fbd[1],
+                        fDims[2] - 2 * fbd[2],
+                        fDims[3] - 2 * fbd[3] }
+  local innerOrigin = { fOrigin[1] + fbd[1] * fcw[1],
+                        fOrigin[2] + fbd[2] * fcw[2],
+                        fOrigin[3] + fbd[3] * fcw[3] }
+  local innerWidth  = { fWidth[1] - 2 * fbd[1] * fcw[1],
+                        fWidth[2] - 2 * fbd[2] * fcw[2],
+                        fWidth[3] - 2 * fbd[3] * fcw[3] }
+  local cInnerDims  = { fInnerDims[1] / factor[1],
+                        fInnerDims[2] / factor[2],
+                        fInnerDims[3] / factor[3] }
+  if fInnerDims[1] % factor[1] ~= 0 or
+     fInnerDims[2] % factor[2] ~= 0 or
+     fInnerDims[3] % factor[3] ~= 0 then
+    error("Inexact coarsening factor")
+  end
+
+  -- Coarse grid values (including boundary)
+  local cDims   = { cInnerDims[1] + 2 * cbd[1],
+                    cInnerDims[2] + 2 * cbd[2],
+                    cInnerDims[3] + 2 * cbd[3] }
+  local ccw     = { fcw[1] * factor[1],
+                    fcw[2] * factor[2],
+                    fcw[3] * factor[3] }
+  local cOrigin = { innerOrigin[1] - cbd[1] * ccw[1],
+                    innerOrigin[2] - cbd[2] * ccw[2],
+                    innerOrigin[3] - cbd[3] * ccw[3] }
+  local cWidth  = { innerWidth[1] + 2 * cbd[1] * ccw[1],
+                    innerWidth[2] + 2 * cbd[2] * ccw[2],
+                    innerWidth[3] + 2 * cbd[3] * ccw[3] }
+
+  -- Build coarse grid
+  local coarse = R.NewRelation {
+    name            = coarseName,
+    mode            = 'GRID',
+    dims            = cDims,
+    origin          = cOrigin,
+    width           = cWidth,
+    boundary_depth  = cbd,
+    periodic        = fine:Periodic(),
+  }
+
+  -- Connect the grids
+  local fbd1, fbd2, fbd3 = fbd[1], fbd[2], fbd[3]
+  local factor1, factor2, factor3 = factor[1], factor[2], factor[3]
+  local cbd1, cbd2, cbd3 = cbd[1], cbd[2], cbd[3]
+  local fldName = 'to_'..coarseName
+  fine._coarsening_fields:insert(fine:NewField(fldName, coarse))
+  local ebb SetCoarseningField(f : fine)
+    if f.in_interior then
+      f.[fldName] = L.UNSAFE_ROW({(L.xid(f) - fbd1) / factor1 + cbd1,
+                                  (L.yid(f) - fbd2) / factor2 + cbd2,
+                                  (L.zid(f) - fbd3) / factor3 + cbd3},
+                                 coarse)
+    end
+  end
+  fine:foreach(SetCoarseningField)
+
+  return coarse
+end
