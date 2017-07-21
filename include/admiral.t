@@ -243,6 +243,10 @@ local function registerTask(tsk, name)
   end
   NAME_CACHE[name] = tsk
   tsk:set_name(name)
+  local parallel_task = tsk:get_parallel_task()
+  if parallel_task then
+    parallel_task:set_name(name)
+  end
   tsk:get_primary_variant():get_ast().name[1] = name -- XXX: Dangerous
   if DEBUG then
     prettyPrintTask(tsk)
