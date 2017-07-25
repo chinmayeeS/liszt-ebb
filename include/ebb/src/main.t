@@ -72,7 +72,7 @@ local ADT AST
        | SetGlobal { global : Global, expr : Expr }
        | While { cond : Cond, spmd : boolean, body : Stmt? }
        | Do { spmd : boolean, body : Stmt? }
-       | Print { fmt : string, vals : Expr* }
+       | Print { fmt : string, globals : Global* }
        | Dump { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Load { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Inline { quot : RQuote }
@@ -248,12 +248,9 @@ end
 -- Misc commands
 -------------------------------------------------------------------------------
 
--- string, (ExprConst | AST.Expr)* -> ()
+-- string, PRE.Global* -> ()
 function M.PRINT(fmt, ...)
-  local args = terralib.newlist({...}):map(function(x)
-    return isExprConst(x) and AST.Const(x) or x
-  end)
-  M.stmts():insert(AST.Print(fmt, args))
+  M.stmts():insert(AST.Print(fmt, terralib.newlist({...})))
 end
 
 -- RG.rquote -> ()

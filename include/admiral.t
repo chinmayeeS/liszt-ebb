@@ -2090,9 +2090,15 @@ function M.AST.Do:toRQuote()
   end
 end
 function M.AST.Print:toRQuote()
-  local valRExprs = self.vals:map(function(v) return v:toRExpr() end)
+  local formals =
+    self.globals:map(function(g) return RG.newsymbol(toRType(g:Type())) end)
+  local task print([formals])
+    C.printf([self.fmt], [formals])
+  end
+  registerTask(print, 'print')
+  local actuals = self.globals:map(function(g) return g:varSymbol() end)
   return rquote
-    C.printf([self.fmt], valRExprs)
+    print([actuals])
   end
 end
 function M.AST.Dump:toRQuote()
