@@ -27,18 +27,22 @@ package.loaded["admiral"] = A
 import 'ebb'
 import 'regent'
 
-local AST = require 'ebb.src.ast'
-local C   = require 'ebb.src.c'
-local F   = require 'ebb.src.functions'
-local L   = require 'ebblib'
-local M   = require 'ebb.src.main'
-local P   = require 'ebb.src.phase'
-local PRE = require 'ebb.src.prelude'
-local R   = require 'ebb.src.relations'
-local RG  = regentlib
-local S   = require 'ebb.src.semant'
-local T   = require 'ebb.src.types'
+local AST  = require 'ebb.src.ast'
+local C    = require 'ebb.src.c'
+local F    = require 'ebb.src.functions'
+local L    = require 'ebblib'
+local M    = require 'ebb.src.main'
+local P    = require 'ebb.src.phase'
+local PRE  = require 'ebb.src.prelude'
+local R    = require 'ebb.src.relations'
+local RG   = regentlib
+local S    = require 'ebb.src.semant'
+local T    = require 'ebb.src.types'
+local UTIL = require 'ebb.src.util'
 
+local all     = UTIL.all
+local isEmpty = UTIL.isEmpty
+local keys    = UTIL.keys
 local newlist = terralib.newlist
 
 -------------------------------------------------------------------------------
@@ -264,81 +268,6 @@ local function registerFun(fun, name)
   if DEBUG then
     prettyPrintFun(fun)
   end
-end
-
-local TerraList = getmetatable(newlist())
-
--- () -> T*
-function TerraList:copy()
-  return self:map(function(x) return x end)
-end
-
--- T -> int?
-function TerraList:find(x)
-  for i,elem in ipairs(self) do
-    if elem == x then
-      return i
-    end
-  end
-  return nil
-end
-
--- () -> set(T)
-function TerraList:toSet()
-  local set = {}
-  for _,elem in ipairs(self) do
-    set[elem] = true
-  end
-  return set
-end
-
--- string? -> string
-function TerraList:join(sep)
-  sep = sep or ' '
-  local res = ''
-  for i,elem in ipairs(self) do
-    if i > 1 then
-      res = res..sep
-    end
-    res = res..tostring(elem)
-  end
-  return res
-end
-
--- () -> T*
-function TerraList:reverse()
-  local res = newlist()
-  for i = #self, 1, -1 do
-    res:insert(self[i])
-  end
-  return res
-end
-
--- () -> T
-function TerraList:pop()
-  local res = self[#self]
-  self[#self] = nil
-  return res
-end
-
--- table -> bool
-local function isEmpty(tab)
-  if not tab then
-    return true
-  end
-  for _,_ in pairs(tab) do
-    return false
-  end
-  return true
-end
-
--- map(K,V) -> K*
-local function keys(map)
-  local res = newlist()
-  for k,v in pairs(map) do
-    res:insert(k)
-  end
-  return res
 end
 
 -------------------------------------------------------------------------------
@@ -1746,7 +1675,7 @@ end
 function AST.InsertStatement:toRQuote(ctxt)
   -- self.record   : AST.RecordLiteral
   --   .names      : string*
-  --   .exprs      : AST.Expression
+  --   .exprs      : AST.Expression*
   -- self.relation.node_type.value : R.Relation
   local rg = ctxt.relMap[self.relation.node_type.value]
   local elem = RG.newsymbol(nil, 'elem')
@@ -2368,7 +2297,7 @@ function A.translateAndRun(mapper_registration, link_flags)
       recordSubsumption(domRel:CouplingField())
     end
     if domRel:isGrid() then
-      for _,fld in domRel:CoarseningFields() do
+      for _,fld in ipairs(domRel:CoarseningFields()) do
         recordSubsumption(fld)
       end
     end

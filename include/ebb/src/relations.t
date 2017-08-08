@@ -28,6 +28,10 @@ local Pre   = require "ebb.src.prelude"
 local T     = require "ebb.src.types"
 local F     = require "ebb.src.functions"
 local M     = require "ebb.src.main"
+local UTIL  = require "ebb.src.util"
+
+local all        = UTIL.all
+local copy_table = UTIL.copy_table
 
 -------------------------------------------------------------------------------
 
@@ -46,22 +50,9 @@ local function is_valid_lua_identifier(name)
   return true
 end
 
-local function copy_table(tbl)
-  local cpy = {}
-  for k,v in pairs(tbl) do cpy[k] = v end
-  return cpy
-end
-
 local function is_num(x) return type(x) == 'number' end
 local function is_bool(x) return type(x) == 'boolean' end
 local function is_int(x) return type(x) == 'number' and x == math.floor(x) end
-
-local function all(list, pred)
-  for _,x in ipairs(list) do
-    if not pred(x) then return false end
-  end
-  return true
-end
 
 -------------------------------------------------------------------------------
 
@@ -302,7 +293,7 @@ end
 
 function R.Relation:CoarseningFields()
   assert(self:isGrid())
-  return copy_table(self._coarsening_fields)
+  return self._coarsening_fields:copy()
 end
 
 -------------------------------------------------------------------------------

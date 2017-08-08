@@ -23,11 +23,14 @@
 
 import "ebb"
 
-local L = require 'ebblib'
-local R = require 'ebb.src.relations'
-
 local Grid = {}
 package.loaded["ebb.domains.grid"] = Grid
+
+local L    = require 'ebblib'
+local R    = require 'ebb.src.relations'
+local UTIL = require 'ebb.src.util'
+
+local copy_table = UTIL.copy_table
 
 -------------------------------------------------------------------------------
 
@@ -51,12 +54,6 @@ end)
 local clamp_idx = L.Macro(function(x, limit)
   return ebb `L.uint64(clamp_impl(x, 0.0, L.double(limit-1)))
 end)
-
-local function copy_table(tbl)
-  local cpy = {}
-  for k,v in pairs(tbl) do cpy[k] = v end
-  return cpy
-end
 
 -------------------------------------------------------------------------------
 

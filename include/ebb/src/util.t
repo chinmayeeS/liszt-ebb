@@ -1,23 +1,23 @@
 -- The MIT License (MIT)
--- 
+--
 -- Copyright (c) 2015 Stanford University.
 -- All rights reserved.
--- 
+--
 -- Permission is hereby granted, free of charge, to any person obtaining a
 -- copy of this software and associated documentation files (the "Software"),
 -- to deal in the Software without restriction, including without limitation
 -- the rights to use, copy, modify, merge, publish, distribute, sublicense,
 -- and/or sell copies of the Software, and to permit persons to whom the
 -- Software is furnished to do so, subject to the following conditions:
--- 
+--
 -- The above copyright notice and this permission notice shall be included
 -- in all copies or substantial portions of the Software.
--- 
+--
 -- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 -- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 -- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 -- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
--- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
+-- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 -- FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 -- DEALINGS IN THE SOFTWARE.
 
@@ -258,4 +258,122 @@ function Rect3d:isempty()
   return self._x[1] > self._x[2] or
          self._y[1] > self._y[2] or
          self._z[1] > self._z[2]
+end
+
+------------------------------------------------------------------------------
+--[[ Tables                                                               ]]--
+------------------------------------------------------------------------------
+
+-- table -> bool
+function Exports.isEmpty(tbl)
+  if not tbl then
+    return true
+  end
+  for _,_ in pairs(tbl) do
+    return false
+  end
+  return true
+end
+
+-- map(K,V) -> K*
+function Exports.keys(tbl)
+  local res = terralib.newlist()
+  for k,v in pairs(tbl) do
+    res:insert(k)
+  end
+  return res
+end
+
+-- T*, (T -> bool) -> bool
+function Exports.all(list, pred)
+  assert(terralib.israwlist(list))
+  for _,x in ipairs(list) do
+    if not pred(x) then return false end
+  end
+  return true
+end
+
+-- T*, (T -> bool) -> bool
+function Exports.any(list, pred)
+  assert(terralib.israwlist(list))
+  for _,x in ipairs(list) do
+    if pred(x) then return true end
+  end
+  return false
+end
+
+-- table -> table
+function Exports.copy_table(tbl)
+  local cpy = {}
+  for k,v in pairs(tbl) do cpy[k] = v end
+  return cpy
+end
+
+------------------------------------------------------------------------------
+--[[ Lists                                                                ]]--
+------------------------------------------------------------------------------
+
+local TerraList = getmetatable(terralib.newlist())
+
+-- (T -> bool) -> bool
+function TerraList:all(pred)
+  return Exports.all(self, pred)
+end
+
+-- (T -> bool) -> bool
+function TerraList:any(pred)
+  return Exports.any(self, pred)
+end
+
+-- () -> T*
+function TerraList:copy()
+  return self:map(function(x) return x end)
+end
+
+-- T -> int?
+function TerraList:find(x)
+  for i,elem in ipairs(self) do
+    if elem == x then
+      return i
+    end
+  end
+  return nil
+end
+
+-- () -> set(T)
+function TerraList:toSet()
+  local set = {}
+  for _,elem in ipairs(self) do
+    set[elem] = true
+  end
+  return set
+end
+
+-- string? -> string
+function TerraList:join(sep)
+  sep = sep or ' '
+  local res = ''
+  for i,elem in ipairs(self) do
+    if i > 1 then
+      res = res..sep
+    end
+    res = res..tostring(elem)
+  end
+  return res
+end
+
+-- () -> T*
+function TerraList:reverse()
+  local res = terralib.newlist()
+  for i = #self, 1, -1 do
+    res:insert(self[i])
+  end
+  return res
+end
+
+-- () -> T
+function TerraList:pop()
+  local res = self[#self]
+  self[#self] = nil
+  return res
 end
