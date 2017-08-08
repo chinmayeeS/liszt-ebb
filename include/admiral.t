@@ -941,6 +941,7 @@ end
 --   global_use     : map(PRE.Global, P.PhaseType)
 --   inserts        : map(R.Relation, AST.InsertStatement)
 --   deletes        : map(R.Relation, AST.DeleteStatement)
+--   manualParal    : bool
 -- }
 
 local FunContext = {}
@@ -1089,6 +1090,149 @@ function FunContext:signature()
   return fullArgs
 end
 
+-- () -> bool
+function AST.Expression:hasNoStencil()
+  error('Abstract Method')
+end
+function AST.BinaryOp:hasNoStencil()
+  return self.lhs:hasNoStencil() and self.rhs:hasNoStencil()
+end
+function AST.Bool:hasNoStencil()
+  return true
+end
+
+function AST.Call:hasNoStencil()
+  if self.func == L.assert or self.func == L.print or self.func == L.rand or
+     self.func == L.id or
+     self.func == L.xid or self.func == L.yid or self.func == L.zid or
+     UNARY_ARITH_FUNS[self.func] or BINARY_ARITH_FUNS[self.func] or
+     self.func == L.fmax or self.func == L.imax or
+     self.func == L.fmin or self.func == L.imin or
+     self.func == L.dot or self.func == L.times then
+    return all(self.params, function(e) return e:hasNoStencil() end)
+  end
+  return false
+end
+function AST.Cast:hasNoStencil()
+  return self.value:hasNoStencil()
+end
+function AST.FieldAccess:hasNoStencil()
+  return self.key:hasNoStencil()
+end
+function AST.FieldAccessIndex:hasNoStencil()
+  return self.base:hasNoStencil() and self.index:hasNoStencil()
+end
+function AST.Global:hasNoStencil()
+  return true
+end
+function AST.GlobalIndex:hasNoStencil()
+  return self.index:hasNoStencil()
+end
+function AST.LetExpr:hasNoStencil()
+  return self.block:hasNoStencil() and self.exp:hasNoStencil()
+end
+function AST.LuaObject:hasNoStencil()
+  quit(self)
+end
+function AST.MatrixLiteral:hasNoStencil()
+  quit(self)
+end
+function AST.Name:hasNoStencil()
+  return true
+end
+function AST.Number:hasNoStencil()
+  return true
+end
+function AST.Quote:hasNoStencil()
+  return self.code:hasNoStencil()
+end
+function AST.RecordLiteral:hasNoStencil()
+  quit(self)
+end
+function AST.Reduce:hasNoStencil()
+  quit(self)
+end
+function AST.SquareIndex:hasNoStencil()
+  return self.base:hasNoStencil() and self.index:hasNoStencil()
+end
+function AST.String:hasNoStencil()
+  quit(self)
+end
+function AST.TableLookup:hasNoStencil()
+  quit(self)
+end
+function AST.UnaryOp:hasNoStencil()
+  return self.exp:hasNoStencil()
+end
+function AST.VectorLiteral:hasNoStencil()
+  return all(self.elems, function(e) return e:hasNoStencil() end)
+end
+function AST.Where:hasNoStencil()
+  quit(self)
+end
+
+-- () -> bool
+function AST.Statement:hasNoStencil()
+  error('Abstract Method')
+end
+function AST.Assignment:hasNoStencil()
+  return self.lvalue:hasNoStencil() and self.exp:hasNoStencil()
+end
+function AST.Break:hasNoStencil()
+  quit(self)
+end
+function AST.DeclStatement:hasNoStencil()
+  return self.initializer:hasNoStencil()
+end
+function AST.DeleteStatement:hasNoStencil()
+  return self.key:hasNoStencil()
+end
+function AST.DoStatement:hasNoStencil()
+  return self.body:hasNoStencil()
+end
+function AST.ExprStatement:hasNoStencil()
+  return self.exp:hasNoStencil()
+end
+function AST.FieldWrite:hasNoStencil()
+  return self.fieldaccess:hasNoStencil() and self.exp:hasNoStencil()
+end
+function AST.GenericFor:hasNoStencil()
+  quit(self)
+end
+function AST.GlobalReduce:hasNoStencil()
+  return self.exp:hasNoStencil()
+end
+function AST.IfStatement:hasNoStencil()
+  return all(self.if_blocks, function(cb)
+               return cb.cond:hasNoStencil() and cb.body:hasNoStencil()
+             end)
+    and (not self.else_block or self.else_block:hasNoStencil())
+end
+function AST.InsertStatement:hasNoStencil()
+  return all(self.record.exprs, function(e) return e:hasNoStencil() end)
+end
+function AST.NumericFor:hasNoStencil()
+  return self.body:hasNoStencil()
+end
+function AST.RepeatStatement:hasNoStencil()
+  quit(self)
+end
+function AST.WhileStatement:hasNoStencil()
+  quit(self)
+end
+
+-- () -> bool
+function AST.Block:hasNoStencil()
+  return all(self.statements, function(s) return s:hasNoStencil() end)
+end
+
+-- FunInfo -> bool
+local function mustParallelizeManually(info)
+  -- HACK: Need to manually parallelize kernels that insert or delete
+  return not (isEmpty(info.inserts) and isEmpty(info.deletes))
+         or info.manualParal
+end
+
 -- FunInfo -> RG.task, FunContext
 function AST.UserFunction:toTask(info)
   -- self.params : AST.Symbol*
@@ -1131,13 +1275,10 @@ function AST.UserFunction:toTask(info)
   if info.domainRel then
     local dom = ctxt.domainSym
     local univ = ctxt.relMap[ctxt.domainRel]
-    if not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
-      -- HACK: Need to manually parallelize insertion kernels.
+    if mustParallelizeManually(info) then
       -- TODO: Only handling the simple case of functions without stencils,
       -- which don't require any changes.
-      for fld,pt in pairs(info.field_use) do
-        assert(pt.centered)
-      end
+      assert(self.body:hasNoStencil())
       task tsk([ctxt:signature()]) where
         dom <= univ, [ctxt.privileges]
       do [body] end
@@ -1181,6 +1322,7 @@ function F.Function:toKernelTask()
   -- }
   info.name = self:Name()
   info.domainRel = argRel
+  info.manualParal = self._MANUAL_PARAL
   local tsk, ctxt = typedAST:toTask(info)
   TO_KERNEL_TASK_CACHE[self] = {tsk, ctxt}
   return tsk, ctxt
@@ -1206,6 +1348,7 @@ function F.Function:toHelperTask(argTypes)
   -- }
   info.name = self:Name()
   info.domainRel = nil
+  info.manualParal = self._MANUAL_PARAL
   typedAST.ptypes = argTypes
   local tsk, ctxt = typedAST:toTask(info)
   TO_HELPER_TASK_CACHE[self] = {tsk, ctxt}
@@ -1901,8 +2044,7 @@ function M.AST.ForEach:toRQuote()
   -- Collect arguments for call
   local actualArgs = newlist()
   local c = RG.newsymbol(nil, 'c')
-  if not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
-    -- HACK: Need to manually parallelize insertion kernels.
+  if mustParallelizeManually(info) then
     assert(not self.subset)
     actualArgs:insert(rexpr [self.rel:primPartSymbol()][c] end)
     for _,rel in ipairs(fCtxt.accessedRels) do
@@ -1933,8 +2075,7 @@ function M.AST.ForEach:toRQuote()
       (op == 'min') and rquote [retSym] min= [callExpr]     end or
       assert(false)
   end
-  if not (isEmpty(info.inserts) and isEmpty(info.deletes)) then
-    -- HACK: Need to manually parallelize insertion kernels.
+  if mustParallelizeManually(info) then
     callQuote = rquote
       for [c] in [A.primColors()] do
         [callQuote]
