@@ -670,7 +670,14 @@ function R.Relation:emitRegionInit()
   local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
   local fillQuote = rquote end
   if self:isCoupled() then
-    fillQuote = rquote fill(rg.__valid, false) end
+    local initValidField
+    __demand(__parallel)
+    task initValidField(r : self:regionType()) where
+      writes(r.__valid)
+    do
+      for e in r do e.__valid = false end
+    end
+    fillQuote = rquote initValidField(rg) end
   end
   return rquote
     [declQuote];
