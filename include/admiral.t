@@ -947,6 +947,8 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
             if not rPtr.__valid then
               r[rPtr] = pullElement(q[qPtr])
               copied = true
+              RG.assert(r[rPtr].__valid,
+                'Pulled particle was not copied correctly')
               break
             end
           end
