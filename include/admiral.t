@@ -575,7 +575,7 @@ end)
 -- () -> RG.index_type
 function R.Relation:indexType()
   if self:isPlain() or self:isCoupled() then
-    return ptr
+    return int1d
   elseif self:isGrid() then
     return int3d
   else assert(false) end
@@ -632,7 +632,7 @@ end)
 -- M.ExprConst -> RG.rexpr
 function R.Relation:translateIndex(lit)
   if self:isPlain() or self:isCoupled() then
-    return rexpr [ptr]([toRConst(lit, L.int)]) end
+    return rexpr [int1d]([toRConst(lit, L.int)]) end
   elseif self:isGrid() then
     assert(terralib.israwlist(lit))
     assert(#lit == 3)
@@ -651,14 +651,14 @@ end
 -- () -> RG.rexpr
 function R.Relation:emitISpaceInit()
   if self:isPlain() then
-    return rexpr ispace(ptr, [self:Size()]) end
+    return rexpr ispace(int1d, [self:Size()]) end
   elseif self:isGrid() then
     local dims = self:Dims()
     return rexpr
       ispace(int3d, { x = [dims[1]], y = [dims[2]], z = [dims[3]] })
     end
   elseif self:isCoupled() then
-    return rexpr ispace(ptr, [self:primPartSize()] * NUM_PRIM_PARTS) end
+    return rexpr ispace(int1d, [self:primPartSize()] * NUM_PRIM_PARTS) end
   else assert(false) end
 end
 
@@ -668,21 +668,19 @@ function R.Relation:emitRegionInit()
   local ispaceExpr = self:emitISpaceInit()
   local fspaceExpr = self:fieldSpace()
   local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
-  local fillQuote = rquote end
-  if self:isCoupled() then
-    local initValidField
-    __demand(__parallel)
-    task initValidField(r : self:regionType()) where
-      writes(r.__valid)
-    do
-      for e in r do e.__valid = false end
-    end
-    fillQuote = rquote initValidField(rg) end
+  return rquote [declQuote] end
+end
+
+function R.Relation:emitValidInit()
+  assert(self:isCoupled())
+  local initValidField
+  __demand(__parallel)
+  task initValidField(r : self:regionType()) where
+    writes(r.__valid)
+  do
+    for e in r do e.__valid = false end
   end
-  return rquote
-    [declQuote];
-    [fillQuote]
-  end
+  return rquote initValidField([self:regionSymbol()]) end
 end
 
 -- () -> RG.rquote
@@ -730,24 +728,24 @@ function R.Relation:emitPrimPartInit()
   elseif self:isCoupled() then
     local primPartSize = self:primPartSize()
     return rquote
-      var coloring = RG.c.legion_point_coloring_create()
+      var coloring = RG.c.legion_domain_point_coloring_create()
       for z = 0, NZ do
         for y = 0, NY do
           for x = 0, NX do
             var rBase : int64
             for rStart in r do
-              rBase = __raw(rStart).value + (z*NX*NY + y*NX + x) * primPartSize
+              rBase = rStart + (z*NX*NY + y*NX + x) * primPartSize
               break
             end
-            RG.c.legion_point_coloring_add_range(
+            RG.c.legion_domain_point_coloring_color_domain(
                 coloring, int3d{x,y,z},
-                [RG.c.legion_ptr_t]{value = rBase},
-                [RG.c.legion_ptr_t]{value = rBase + primPartSize - 1})
+                [rect1d]{ rBase,
+                          rBase + primPartSize - 1 })
           end
         end
       end
       var [p] = partition(disjoint, r, coloring, [A.primColors()])
-      RG.c.legion_point_coloring_destroy(coloring)
+      RG.c.legion_domain_point_coloring_destroy(coloring)
     end
   else assert(false) end
 end
@@ -786,7 +784,7 @@ function R.Relation:emitQueueInit(i)
   local size = self:MaxXferNum() * NUM_PRIM_PARTS
   local fspaceExpr = self:queueFieldSpace()
   return rquote
-    var [q] = region(ispace(ptr, size), fspaceExpr)
+    var [q] = region(ispace(int1d, size), fspaceExpr)
   end
 end
 
@@ -799,40 +797,39 @@ function R.Relation:emitQueuePartInit(i)
   local colors = A.primColors()
   local stencil = self:XferStencil()[i]
   return rquote
-    var srcColoring = RG.c.legion_point_coloring_create()
+    var srcColoring = RG.c.legion_domain_point_coloring_create()
     for z = 0, NZ do
       for y = 0, NY do
         for x = 0, NX do
           var qBase : int64
           for qStart in q do
-            qBase =
-              __raw(qStart).value + (z*NX*NY + y*NX + x) * [self:MaxXferNum()]
+            qBase = qStart + (z*NX*NY + y*NX + x) * [self:MaxXferNum()]
             break
           end
-          RG.c.legion_point_coloring_add_range(
+          RG.c.legion_domain_point_coloring_color_domain(
               srcColoring, int3d{x,y,z},
-              [RG.c.legion_ptr_t]{value = qBase},
-              [RG.c.legion_ptr_t]{value = qBase + [self:MaxXferNum()] - 1})
+              [rect1d] { qBase,
+                         qBase + [self:MaxXferNum()] - 1 })
         end
       end
     end
     var [qSrcPart] = partition(disjoint, q, srcColoring, colors)
-    RG.c.legion_point_coloring_destroy(srcColoring)
-    var dstColoring = RG.c.legion_point_coloring_create()
+    RG.c.legion_domain_point_coloring_destroy(srcColoring)
+    var dstColoring = RG.c.legion_domain_point_coloring_create()
     var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
     for c in colors do
       var srcBase : int64
       for qptr in qSrcPart[(c - colorOff + {NX,NY,NZ}) % {NX,NY,NZ}] do
-        srcBase = __raw(qptr).value
+        srcBase = [int1d](qptr)
         break
       end
-      RG.c.legion_point_coloring_add_range(
+      RG.c.legion_domain_point_coloring_color_domain(
         dstColoring, c,
-        [RG.c.legion_ptr_t]{value = srcBase},
-        [RG.c.legion_ptr_t]{value = srcBase + [self:MaxXferNum()] - 1})
+        [rect1d] { srcBase,
+                   srcBase + [self:MaxXferNum()] - 1 })
     end
     var [qDstPart] = partition(aliased, q, dstColoring, colors)
-    RG.c.legion_point_coloring_destroy(dstColoring)
+    RG.c.legion_domain_point_coloring_destroy(dstColoring)
   end
 end
 
@@ -859,6 +856,20 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     var ptr : &int8 = [&int8](dst) + idx * [self:queueFieldSpace().N]
     C.memcpy(ptr, &src, [self:queueFieldSpace().N])
   end
+  local terra get_base_pointer(pr : RG.c.legion_physical_region_t,
+                               fid : RG.c.legion_field_id_t,
+                               runtime : RG.c.legion_runtime_t)
+    var acc = RG.c.legion_physical_region_get_field_accessor_generic(pr, fid)
+    var lr = RG.c.legion_physical_region_get_logical_region(pr)
+    var domain = RG.c.legion_index_space_get_domain(runtime, lr.index_space)
+    var rect = RG.c.legion_domain_get_rect_1d(domain)
+    var subrect : RG.c.legion_rect_1d_t
+    var offsets : RG.c.legion_byte_offset_t[1]
+    var p = RG.c.legion_accessor_generic_raw_rect_ptr_1d(
+        acc, rect, &subrect, &(offsets[0]))
+    RG.c.legion_accessor_generic_destroy(acc)
+    return p
+  end
   registerFun(pushElement, self:Name()..'_pushElement')
   for i,stencil in ipairs(self:XferStencil()) do
     local q = RG.newsymbol(self:queueRegionType(), 'q'..(i-1))
@@ -870,16 +881,8 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
       for qPtr in [q] do
         [q][qPtr][ [self:validFieldOffset()] ] = [int8](false)
       end
-      var [qBasePtr]
-      do
-        var acc = RG.c.legion_physical_region_get_field_accessor_array
-                    (__physical([q])[0], __fields([q])[0])
-        for qPtr in [q] do
-          [qBasePtr] = RG.c.legion_accessor_array_ref(acc, __raw(qPtr))
-          break
-        end
-        RG.c.legion_accessor_array_destroy(acc)
-      end
+      var [qBasePtr] =
+       get_base_pointer(__physical([q])[0], __fields([q])[0], __runtime())
     end)
     moveChecks:insert(rquote
       do
@@ -1487,7 +1490,7 @@ function AST.Call:toRExpr(ctxt)
       return rexpr int3d{ [vals[1]], [vals[2]], [vals[3]] } end
     else
       assert(#vals == 1)
-      return rexpr [ptr]([vals[1]]) end
+      return rexpr [int1d]([vals[1]]) end
     end
   end
   -- Call to terra function
@@ -2352,6 +2355,12 @@ function A.translateAndRun(mapper_registration, link_flags)
     end
   end
   body:insertall(emitFillTaskCalls(fillStmts))
+  for _,rel in ipairs(rels) do
+    if rel:isCoupled() then
+      body:insertall(rel:emitValidInit())
+    end
+  end
+
   -- Process other statements
   for _,s in ipairs(M.stmts()) do
     if not M.AST.FillField.check(s) then
