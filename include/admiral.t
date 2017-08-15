@@ -667,19 +667,20 @@ function R.Relation:emitRegionInit()
   local rg = self:regionSymbol()
   local ispaceExpr = self:emitISpaceInit()
   local fspaceExpr = self:fieldSpace()
-  local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
-  return rquote [declQuote] end
+  return rquote var [rg] = region(ispaceExpr, fspaceExpr) end
 end
 
+-- () -> RG.rquote
 function R.Relation:emitValidInit()
   assert(self:isCoupled())
   local initValidField
-  __demand(__parallel)
-  task initValidField(r : self:regionType()) where
-    writes(r.__valid)
-  do
-    for e in r do e.__valid = false end
+  __demand(__parallel) task initValidField(r : self:regionType())
+  where writes(r.__valid) do
+    for e in r do
+      e.__valid = false
+    end
   end
+  registerTask(initValidField, self:Name()..'_initValidField')
   return rquote initValidField([self:regionSymbol()]) end
 end
 
@@ -738,9 +739,8 @@ function R.Relation:emitPrimPartInit()
               break
             end
             RG.c.legion_domain_point_coloring_color_domain(
-                coloring, int3d{x,y,z},
-                [rect1d]{ rBase,
-                          rBase + primPartSize - 1 })
+              coloring, int3d{x,y,z},
+              [rect1d]{ rBase, rBase + primPartSize - 1 })
           end
         end
       end
@@ -807,9 +807,8 @@ function R.Relation:emitQueuePartInit(i)
             break
           end
           RG.c.legion_domain_point_coloring_color_domain(
-              srcColoring, int3d{x,y,z},
-              [rect1d] { qBase,
-                         qBase + [self:MaxXferNum()] - 1 })
+            srcColoring, int3d{x,y,z},
+            [rect1d]{ qBase, qBase + [self:MaxXferNum()] - 1 })
         end
       end
     end
@@ -825,8 +824,7 @@ function R.Relation:emitQueuePartInit(i)
       end
       RG.c.legion_domain_point_coloring_color_domain(
         dstColoring, c,
-        [rect1d] { srcBase,
-                   srcBase + [self:MaxXferNum()] - 1 })
+        [rect1d]{ srcBase, srcBase + [self:MaxXferNum()] - 1 })
     end
     var [qDstPart] = partition(aliased, q, dstColoring, colors)
     RG.c.legion_domain_point_coloring_destroy(dstColoring)
@@ -882,7 +880,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
         [q][qPtr][ [self:validFieldOffset()] ] = [int8](false)
       end
       var [qBasePtr] =
-       get_base_pointer(__physical([q])[0], __fields([q])[0], __runtime())
+        get_base_pointer(__physical([q])[0], __fields([q])[0], __runtime())
     end)
     moveChecks:insert(rquote
       do
@@ -2357,7 +2355,7 @@ function A.translateAndRun(mapper_registration, link_flags)
   body:insertall(emitFillTaskCalls(fillStmts))
   for _,rel in ipairs(rels) do
     if rel:isCoupled() then
-      body:insertall(rel:emitValidInit())
+      body:insert(rel:emitValidInit())
     end
   end
 
