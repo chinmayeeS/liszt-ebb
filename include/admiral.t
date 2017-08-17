@@ -58,24 +58,14 @@ local OBJNAME = os.getenv('OBJNAME') or 'a.out'
 
 local USE_HDF = not (os.getenv('USE_HDF') == '0')
 
-local HDF_HEADER
-if USE_HDF then
-  if exists('/usr/include/hdf5/serial') then
-    HDF_HEADER = 'hdf5/serial/hdf5.h'
-  else
-    HDF_HEADER = 'hdf5.h'
-  end
-end
+local HDF_LIBNAME = os.getenv('HDF_LIBNAME') or 'hdf5'
+
+local HDF_HEADER = os.getenv('HDF_HEADER') or 'hdf5.h'
 
 local LIBS = newlist({'-lm'})
 if USE_HDF then
-  if exists('/usr/include/hdf5/serial') then
-    terralib.linklibrary('libhdf5_serial.so')
-    LIBS:insert('-lhdf5_serial')
-  else
-    terralib.linklibrary('libhdf5.so')
-    LIBS:insertall {'-L/usr/lib/x86_64-linux-gnu', '-lhdf' }
-  end
+  terralib.linklibrary('lib'..HDF_LIBNAME..'.so')
+  LIBS:insert('-l'..HDF_LIBNAME)
 end
 
 -- () -> int,int,int
@@ -219,11 +209,22 @@ local function prettyPrintTask(tsk)
   tsk:printpretty()
 end
 
+-- {string,terralib.type} | {field:string,type:terralib.type} ->
+--   string, terralib.type
+local function parseStructEntry(entry)
+  if terralib.israwlist(entry) and #entry == 2 then
+    return entry[1], entry[2]
+  elseif entry.field and entry.type then
+    return entry.field, entry.type
+  else assert(false) end
+end
+
 -- terralib.struct -> ()
 local function prettyPrintStruct(s)
   print('struct '..s.name..' {')
   for _,e in ipairs(s.entries) do
-    print('  '..e.field..' : '..tostring(e.type)..';')
+    local name, type = parseStructEntry(e)
+    print('  '..name..' : '..tostring(type)..';')
   end
   print('}')
 end
@@ -1888,15 +1889,17 @@ if USE_HDF then
         end
         -- terralib.struct, set(string), string -> ()
         local function emitFieldDecls(fs, whitelist, prefix)
-           -- TODO: Only supporting pure structs, not fspaces
+          -- TODO: Only supporting pure structs, not fspaces
           assert(fs:isstruct())
-          for _,fld in ipairs(fs.entries) do
-            if whitelist and not whitelist[fld.field] then
-            elseif fld.type:isstruct() then
-              emitFieldDecls(fld.type, nil, prefix..fld.field..'.')
+          for _,e in ipairs(fs.entries) do
+            local name, type = parseStructEntry(e)
+            if whitelist and not whitelist[name] then
+              -- do nothing
+            elseif type:isstruct() then
+              emitFieldDecls(type, nil, prefix..name..'.')
             else
-              local hName = prefix..fld.field
-              local hType = toHType(fld.type)
+              local hName = prefix..name
+              local hType = toHType(type)
               local dataSet = symbol(HDF5.hid_t, 'dataSet')
               header:insert(quote
                 var [dataSet] = HDF5.H5Dcreate2(
