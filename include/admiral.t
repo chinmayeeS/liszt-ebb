@@ -858,15 +858,15 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   local terra get_base_pointer(pr : RG.c.legion_physical_region_t,
                                fid : RG.c.legion_field_id_t,
                                runtime : RG.c.legion_runtime_t)
-    var acc = RG.c.legion_physical_region_get_field_accessor_generic(pr, fid)
+    var acc = RG.c.legion_physical_region_get_field_accessor_array_1d(pr, fid)
     var lr = RG.c.legion_physical_region_get_logical_region(pr)
     var domain = RG.c.legion_index_space_get_domain(runtime, lr.index_space)
-    var rect = RG.c.legion_domain_get_rect_1d(domain)
+    var rect = RG.c.legion_domain_get_bounds_1d(domain)
     var subrect : RG.c.legion_rect_1d_t
     var offsets : RG.c.legion_byte_offset_t[1]
-    var p = RG.c.legion_accessor_generic_raw_rect_ptr_1d(
+    var p = RG.c.legion_accessor_array_1d_raw_rect_ptr(
         acc, rect, &subrect, &(offsets[0]))
-    RG.c.legion_accessor_generic_destroy(acc)
+    RG.c.legion_accessor_array_1d_destroy(acc)
     return p
   end
   registerFun(pushElement, self:Name()..'_pushElement')
