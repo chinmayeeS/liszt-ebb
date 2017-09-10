@@ -72,6 +72,7 @@ local ADT AST
        | SetGlobal { global : Global, expr : Expr }
        | While { cond : Cond, spmd : boolean, body : Stmt? }
        | Do { spmd : boolean, body : Stmt? }
+       | Trace { body : Stmt? }
        | Print { fmt : string, globals : Global* }
        | Dump { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Load { rel : Relation, flds : string*, file : string, vals : Expr* }
@@ -222,6 +223,11 @@ function M.DO(spmd)
   scopes:insert(terralib.newlist())
 end
 
+function M.TRACE()
+  stack:insert(AST.Trace(nil))
+  scopes:insert(terralib.newlist())
+end
+
 -- () -> ()
 function M.END()
   assert(#stack > 0)
@@ -237,6 +243,8 @@ function M.END()
   elseif AST.While.check(wrapper) then
     wrapper.body = AST.Block(stmts)
   elseif AST.Do.check(wrapper) then
+    wrapper.body = AST.Block(stmts)
+  elseif AST.Trace.check(wrapper) then
     wrapper.body = AST.Block(stmts)
   else assert(false) end
   scopes[#scopes-1]:insert(wrapper)
