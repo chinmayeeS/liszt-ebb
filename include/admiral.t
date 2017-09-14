@@ -1406,8 +1406,12 @@ function AST.Call:toRExpr(ctxt)
   -- Assertion
   -- self.params[1] : AST.Expression
   if self.func == L.assert then
-    return rexpr
-      RG.assert([self.params[1]:toRExpr(ctxt)], '(Liszt assertion)')
+    if RG.check_cuda_available() then
+      return rexpr 0 end
+    else
+      return rexpr
+        RG.assert([self.params[1]:toRExpr(ctxt)], '(Liszt assertion)')
+      end
     end
   end
   -- Key unboxing
