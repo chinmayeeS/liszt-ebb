@@ -1929,7 +1929,7 @@ if USE_HDF then
       reads(r.[flds])
     do
       create(filename)
-      var s = region([self:emitISpaceInit()], fs)
+      var s = region(r.ispace, fs)
       attach(hdf5, s.[flds], filename, RG.file_read_write)
       acquire(s.[flds])
       copy(r.[flds], s.[flds])
@@ -1956,7 +1956,7 @@ if USE_HDF then
     where
       reads writes(r.[flds])
     do
-      var s = region([self:emitISpaceInit()], fs)
+      var s = region(r.ispace, fs)
       attach(hdf5, s.[flds], filename, RG.file_read_only)
       acquire(s.[flds])
       copy(s.[flds], r.[flds])
