@@ -543,6 +543,16 @@ R.Relation.primPartSymbol = terralib.memoize(function(self)
   return RG.newsymbol(nil, self:Name()..'_primPart')
 end)
 
+-- () -> RG.symbol
+R.Relation.copyRegionSymbol = terralib.memoize(function(self)
+ return RG.newsymbol(nil, self:Name()..'_copy')
+end)
+
+-- () -> RG.symbol
+R.Relation.copyPrimPartSymbol = terralib.memoize(function(self)
+  return RG.newsymbol(nil, self:Name()..'_copy_primPart')
+end)
+
 -- () -> RG.symbol*
 R.Relation.queues = terralib.memoize(function(self)
   assert(self:isCoupled())
@@ -665,10 +675,15 @@ end
 
 -- () -> RG.rquote
 function R.Relation:emitRegionInit()
-  local rg = self:regionSymbol()
-  local ispaceExpr = self:emitISpaceInit()
-  local fspaceExpr = self:fieldSpace()
-  return rquote var [rg] = region(ispaceExpr, fspaceExpr) end
+  local fs = self:fieldSpace()
+  return rquote
+    var is = [self:emitISpaceInit()]
+    var [self:regionSymbol()] = region(is, fs)
+    -- TODO:
+    -- single copy-region for every dump/load variant
+    -- declaring all fields on the copy-region, not just the ones dumped/loaded
+    var [self:copyRegionSymbol()] = region(is, fs)
+  end
 end
 
 -- () -> RG.rquote
@@ -688,11 +703,14 @@ end
 -- () -> RG.rquote
 function R.Relation:emitPrimPartInit()
   local r = self:regionSymbol()
-  local p = self:primPartSymbol()
+  local p_r = self:primPartSymbol()
+  local s = self:copyRegionSymbol()
+  local p_s = self:copyPrimPartSymbol()
   if self:isPlain() then
     assert(self:Size() % NUM_PRIM_PARTS == 0)
     return rquote
-      var [p] = partition(equal, r, [A.primColors()])
+      var [p_r] = partition(equal, r, [A.primColors()])
+      var [p_s] = partition(equal, s, [A.primColors()])
     end
   elseif self:isGrid() then
     -- Check for exact partitioning of grid interior
@@ -724,7 +742,8 @@ function R.Relation:emitPrimPartInit()
         if c.z == NZ-1 then rect.hi.z += [bd[3]] end
         RG.c.legion_domain_point_coloring_color_domain(coloring, c, rect)
       end
-      var [p] = partition(disjoint, r, coloring, [A.primColors()])
+      var [p_r] = partition(disjoint, r, coloring, [A.primColors()])
+      var [p_s] = partition(disjoint, s, coloring, [A.primColors()])
       RG.c.legion_domain_point_coloring_destroy(coloring)
     end
   elseif self:isCoupled() then
@@ -745,7 +764,8 @@ function R.Relation:emitPrimPartInit()
           end
         end
       end
-      var [p] = partition(disjoint, r, coloring, [A.primColors()])
+      var [p_r] = partition(disjoint, r, coloring, [A.primColors()])
+      var [p_s] = partition(disjoint, s, coloring, [A.primColors()])
       RG.c.legion_domain_point_coloring_destroy(coloring)
     end
   else assert(false) end
@@ -1824,37 +1844,41 @@ if USE_HDF then
   HDF5.H5F_ACC_TRUNC = 2
   HDF5.H5P_DEFAULT = 0
 
-  -- string* -> RG.task
-  -- TODO: Not caching the generated tasks.
-  function R.Relation:emitDump(flds)
+  -- string*, string, RG.rexpr* -> RG.rquote
+  function R.Relation:emitDump(flds, file, vals)
     local flds = flds:copy()
     if self:isCoupled() then
       assert(flds:find(self:CouplingField():Name()))
       flds:insert('__valid')
     end
-    local dims = self:Dims()
-    local nDims = #dims
-    local isType = self:indexSpaceType()
-    local fs = self:fieldSpace()
     local terra create(filename : rawstring)
-      var file = HDF5.H5Fcreate(filename, HDF5.H5F_ACC_TRUNC,
-                                HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
-      var sizes : HDF5.hsize_t[nDims]
+      var fid = HDF5.H5Fcreate(filename, HDF5.H5F_ACC_TRUNC,
+                               HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
+      var dataSpace : int32
       escape
-        if #dims == 1 then
+        if self:isPlain() then
           emit quote
-            sizes[0] = [dims[1]]
+            var sizes : HDF5.hsize_t[1]
+            sizes[0] = [self:Size()]
+            dataSpace = HDF5.H5Screate_simple(1, sizes, [&uint64](0))
           end
-        elseif #dims == 3 then
+        elseif self:isGrid() then
           emit quote
-            sizes[0] = [dims[1]]
-            sizes[1] = [dims[2]]
-            sizes[2] = [dims[3]]
+            -- Legion defaults to column-major layout, so we have to reverse.
+            -- This implies that x and z will be flipped in the output file.
+            var sizes : HDF5.hsize_t[3]
+            sizes[2] = [self:Dims()[1]]
+            sizes[1] = [self:Dims()[2]]
+            sizes[0] = [self:Dims()[3]]
+            dataSpace = HDF5.H5Screate_simple(3, sizes, [&uint64](0))
+          end
+        elseif self:isCoupled() then
+          emit quote
+            var sizes : HDF5.hsize_t[1]
+            sizes[0] = [self:primPartSize()] * NUM_PRIM_PARTS
+            dataSpace = HDF5.H5Screate_simple(1, sizes, [&uint64](0))
           end
         else assert(false) end
-      end
-      var dataSpace = HDF5.H5Screate_simple([#dims], sizes, [&uint64](0))
-      escape
         local header = newlist() -- terralib.quote*
         local footer = newlist() -- terralib.quote*
         -- terralib.type -> terralib.quote
@@ -1907,7 +1931,7 @@ if USE_HDF then
               local dataSet = symbol(HDF5.hid_t, 'dataSet')
               header:insert(quote
                 var [dataSet] = HDF5.H5Dcreate2(
-                  file, hName, hType, dataSpace,
+                  fid, hName, hType, dataSpace,
                   HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
               end)
               footer:insert(quote
@@ -1916,55 +1940,63 @@ if USE_HDF then
             end
           end
         end
-        emitFieldDecls(fs, flds:toSet(), '')
+        emitFieldDecls(self:fieldSpace(), flds:toSet(), '')
         emit quote [header] end
         emit quote [footer:reverse()] end
       end
       HDF5.H5Sclose(dataSpace)
-      HDF5.H5Fclose(file)
-    end
-    local dump __demand(__inline) task dump(r : region(isType, fs),
-                                            filename : rawstring)
-    where
-      reads(r.[flds])
-    do
-      create(filename)
-      var s = region(r.ispace, fs)
-      attach(hdf5, s.[flds], filename, RG.file_read_write)
-      acquire(s.[flds])
-      copy(r.[flds], s.[flds])
-      release(s.[flds])
-      detach(hdf5, s.[flds])
+      HDF5.H5Fclose(fid)
     end
     registerFun(create, self:Name()..'_hdf5create_'..flds:join('_'))
-    registerTask(dump, self:Name()..'_hdf5dump_'..flds:join('_'))
-    return dump
+    local r = self:regionSymbol()
+    local p_r = self:primPartSymbol()
+    local s = self:copyRegionSymbol()
+    local p_s = self:copyPrimPartSymbol()
+    return rquote
+      var filename = [rawstring](C.malloc(256))
+      C.snprintf(filename, 256, file, vals)
+      create(filename)
+      attach(hdf5, s.[flds], filename, RG.file_read_write)
+      for c in [A.primColors()] do
+        var p_r_c = p_r[c]
+        var p_s_c = p_s[c]
+        acquire(p_s_c.[flds])
+        copy(p_r_c.[flds], p_s_c.[flds])
+        release(p_s_c.[flds])
+      end
+      detach(hdf5, s.[flds])
+      C.free(filename)
+    end
   end
 
-  -- string* -> RG.task
-  -- TODO: Not caching the generated tasks.
-  function R.Relation:emitLoad(flds)
+  -- string*, string, RG.rexpr* -> RG.rquote
+  function R.Relation:emitLoad(flds, file, vals)
     local flds = flds:copy()
+    local primPartQuote = rquote end
     if self:isCoupled() then
       assert(flds:find(self:CouplingField():Name()))
       flds:insert('__valid')
+      primPartQuote = self:emitPrimPartCheck()
     end
-    local isType = self:indexSpaceType()
-    local fs = self:fieldSpace()
-    local load __demand(__inline) task load(r : region(isType, fs),
-                                            filename : rawstring)
-    where
-      reads writes(r.[flds])
-    do
-      var s = region(r.ispace, fs)
+    local r = self:regionSymbol()
+    local p_r = self:primPartSymbol()
+    local s = self:copyRegionSymbol()
+    local p_s = self:copyPrimPartSymbol()
+    return rquote
+      var filename = [rawstring](C.malloc(256))
+      C.snprintf(filename, 256, file, vals)
       attach(hdf5, s.[flds], filename, RG.file_read_only)
-      acquire(s.[flds])
-      copy(s.[flds], r.[flds])
-      release(s.[flds])
+      for c in [A.primColors()] do
+        var p_r_c = p_r[c]
+        var p_s_c = p_s[c]
+        acquire(p_s_c.[flds])
+        copy(p_s_c.[flds], p_r_c.[flds])
+        release(p_s_c.[flds])
+      end
       detach(hdf5, s.[flds])
+      C.free(filename)
+      [primPartQuote]
     end
-    registerTask(load, self:Name()..'_hdf5load_'..flds:join('_'))
-    return load
   end
 
 end -- if USE_HDF
@@ -2119,31 +2151,12 @@ function M.AST.Print:toRQuote()
   end
 end
 function M.AST.Dump:toRQuote()
-  local dump = self.rel:emitDump(self.flds)
-  local relSym = self.rel:regionSymbol()
   local valRExprs = self.vals:map(function(v) return v:toRExpr() end)
-  return rquote
-    var filename = [rawstring](C.malloc(256))
-    C.snprintf(filename, 256, [self.file], valRExprs)
-    dump(relSym, filename)
-    C.free(filename)
-  end
+  return self.rel:emitDump(self.flds, self.file, valRExprs)
 end
 function M.AST.Load:toRQuote()
-  local load = self.rel:emitLoad(self.flds)
-  local relSym = self.rel:regionSymbol()
   local valRExprs = self.vals:map(function(v) return v:toRExpr() end)
-  local primPartQuote = rquote end
-  if self.rel:isCoupled() then
-    primPartQuote = self.rel:emitPrimPartCheck()
-  end
-  return rquote
-    var filename = [rawstring](C.malloc(256))
-    C.snprintf(filename, 256, [self.file], valRExprs)
-    load(relSym, filename)
-    C.free(filename)
-    [primPartQuote]
-  end
+  return self.rel:emitLoad(self.flds, self.file, valRExprs)
 end
 function M.AST.Inline:toRQuote()
   return self.quot
