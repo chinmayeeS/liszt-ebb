@@ -54,16 +54,22 @@ local DEBUG = os.getenv('DEBUG') == '1'
 
 local SAVEOBJ = os.getenv('SAVEOBJ') == '1'
 
-local OBJNAME = os.getenv('OBJNAME') or 'a.out'
+local LIBS = newlist({'-lm'})
 
-local USE_HDF = not (os.getenv('USE_HDF') == '0')
+local OBJNAME = os.getenv('OBJNAME') or 'a.out'
 
 local HDF_LIBNAME = os.getenv('HDF_LIBNAME') or 'hdf5'
 
 local HDF_HEADER = os.getenv('HDF_HEADER') or 'hdf5.h'
 
-local LIBS = newlist({'-lm'})
+local HDF_ROOT = os.getenv('HDF_ROOT') -- may be nil
+
+local USE_HDF = not (os.getenv('USE_HDF') == '0')
 if USE_HDF then
+  if HDF_ROOT then
+    terralib.includepath = terralib.includepath..':'..HDF_ROOT..'/include'
+    LIBS:insert('-L'..HDF_ROOT..'/lib')
+  end
   terralib.linklibrary('lib'..HDF_LIBNAME..'.so')
   LIBS:insert('-l'..HDF_LIBNAME)
 end
