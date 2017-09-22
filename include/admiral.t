@@ -41,6 +41,10 @@ local T   = require 'ebb.src.types'
 
 local newlist = terralib.newlist
 
+-- HACK: Work around a bug in terra: it expects the INCLUDE_PATH with ';'
+-- separators, rather than ':'.
+terralib.includepath = terralib.includepath:gsub(':', ';')
+
 -------------------------------------------------------------------------------
 -- Parse config options
 -------------------------------------------------------------------------------
@@ -62,14 +66,8 @@ local HDF_LIBNAME = os.getenv('HDF_LIBNAME') or 'hdf5'
 
 local HDF_HEADER = os.getenv('HDF_HEADER') or 'hdf5.h'
 
-local HDF_ROOT = os.getenv('HDF_ROOT') -- may be nil
-
 local USE_HDF = not (os.getenv('USE_HDF') == '0')
 if USE_HDF then
-  if HDF_ROOT then
-    terralib.includepath = terralib.includepath..':'..HDF_ROOT..'/include'
-    LIBS:insert('-L'..HDF_ROOT..'/lib')
-  end
   terralib.linklibrary('lib'..HDF_LIBNAME..'.so')
   LIBS:insert('-l'..HDF_LIBNAME)
 end
