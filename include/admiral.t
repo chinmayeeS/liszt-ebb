@@ -41,10 +41,6 @@ local T   = require 'ebb.src.types'
 
 local newlist = terralib.newlist
 
--- HACK: Work around a bug in terra: it expects the INCLUDE_PATH with ';'
--- separators, rather than ':'.
-terralib.includepath = terralib.includepath:gsub(':', ';')
-
 -------------------------------------------------------------------------------
 -- Parse config options
 -------------------------------------------------------------------------------
