@@ -1905,6 +1905,7 @@ if USE_HDF then
             header:insert(quote
               var dims : HDF5.hsize_t[1]
               dims[0] = T.N
+              var elemType = [elemType]
               var [arrayType] = HDF5.H5Tarray_create2(elemType, 1, dims)
             end)
             footer:insert(quote
@@ -1928,6 +1929,7 @@ if USE_HDF then
               local hType = toHType(type)
               local dataSet = symbol(HDF5.hid_t, 'dataSet')
               header:insert(quote
+                var hType = [hType]
                 var [dataSet] = HDF5.H5Dcreate2(
                   fid, hName, hType, dataSpace,
                   HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
