@@ -52,8 +52,6 @@ end
 
 local DEBUG = os.getenv('DEBUG') == '1'
 
-local SAVEOBJ = os.getenv('SAVEOBJ') == '1'
-
 local LIBS = newlist({'-lm'})
 
 local OBJNAME = os.getenv('OBJNAME') or 'a.out'
@@ -2407,15 +2405,10 @@ function A.translateAndRun(mapper_registration, link_flags)
     __parallelize_with [opts] do [body] end
   end
   registerTask(main, 'main')
-  -- Emit to executable or run
-  if SAVEOBJ then
-    print('Saving executable to '..OBJNAME)
-    link_flags = link_flags or newlist()
-    for idx = 1, #LIBS do
-      link_flags[#link_flags + 1] = LIBS[idx]
-    end
-    RG.saveobj(main, OBJNAME, 'executable', mapper_registration, link_flags)
-  else
-    RG.start(main, mapper_registration)
+  -- Emit to executable
+  link_flags = link_flags or newlist()
+  for idx = 1, #LIBS do
+    link_flags[#link_flags + 1] = LIBS[idx]
   end
+  RG.saveobj(main, OBJNAME, 'executable', mapper_registration, link_flags)
 end
