@@ -202,7 +202,7 @@ local function prettyPrintFun(fun)
   end
 end
 
--- RG.Task -> ()
+-- RG.task -> ()
 local function prettyPrintTask(tsk)
   tsk:printpretty()
 end
@@ -635,6 +635,7 @@ R.Relation.validFieldOffset = terralib.memoize(function(self)
     var x : self:fieldSpace()
     return [int64]([&int8](&(x.__valid)) - [&int8](&x))
   end
+  registerFun(getOffset, self:Name()..'_getOffset')
   return getOffset()
 end)
 
@@ -873,9 +874,10 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     var ptr : &int8 = [&int8](dst) + idx * [self:queueFieldSpace().N]
     C.memcpy(ptr, &src, [self:queueFieldSpace().N])
   end
-  local terra get_base_pointer(pr : RG.c.legion_physical_region_t,
-                               fid : RG.c.legion_field_id_t,
-                               runtime : RG.c.legion_runtime_t)
+  registerFun(pushElement, self:Name()..'_pushElement')
+  local terra getBasePointer(pr : RG.c.legion_physical_region_t,
+                             fid : RG.c.legion_field_id_t,
+                             runtime : RG.c.legion_runtime_t)
     var acc = RG.c.legion_physical_region_get_field_accessor_array_1d(pr, fid)
     var lr = RG.c.legion_physical_region_get_logical_region(pr)
     var domain = RG.c.legion_index_space_get_domain(runtime, lr.index_space)
@@ -887,7 +889,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     RG.c.legion_accessor_array_1d_destroy(acc)
     return p
   end
-  registerFun(pushElement, self:Name()..'_pushElement')
+  registerFun(getBasePointer, self:Name()..'_getBasePointer')
   for i,stencil in ipairs(self:XferStencil()) do
     local q = RG.newsymbol(self:queueRegionType(), 'q'..(i-1))
     local qBasePtr = RG.newsymbol(&opaque, 'qBasePtr'..(i-1))
@@ -899,7 +901,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
         [q][qPtr][ [self:validFieldOffset()] ] = [int8](false)
       end
       var [qBasePtr] =
-        get_base_pointer(__physical([q])[0], __fields([q])[0], __runtime())
+        getBasePointer(__physical([q])[0], __fields([q])[0], __runtime())
     end)
     moveChecks:insert(rquote
       do
