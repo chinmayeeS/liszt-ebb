@@ -235,7 +235,7 @@ end
 local NAME_CACHE = {} -- map(string, (* -> *) | RG.task)
 
 -- RG.task, string -> ()
-local function registerTask(tsk, name)
+function A.registerTask(tsk, name)
   name = idSanitize(name)
   while NAME_CACHE[name] do
     name = name..'_'
@@ -253,7 +253,7 @@ local function registerTask(tsk, name)
 end
 
 -- (* -> *), string -> ()
-local function registerFun(fun, name)
+function A.registerFun(fun, name)
   name = idSanitize(name)
   while NAME_CACHE[name] do
     name = name..'_'
@@ -361,7 +361,7 @@ local emitDotProduct = terralib.memoize(function(T, N)
   local terra dot([a], [b]) : T
     return [expr]
   end
-  registerFun(dot, 'dot_'..tostring(T)..'_'..tostring(N))
+  A.registerFun(dot, 'dot_'..tostring(T)..'_'..tostring(N))
   return dot
 end)
 
@@ -381,7 +381,7 @@ local emitVectorVectorOp = terralib.memoize(function(op, T, N)
   local terra vvop([a], [b]) : Vector(T,N)
     return array([elems])
   end
-  registerFun(vvop, 'vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
+  A.registerFun(vvop, 'vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   return vvop
 end)
 
@@ -401,7 +401,7 @@ local emitVectorScalarOp = terralib.memoize(function(op, T, N)
   local terra vsop([a], [b]) : Vector(T,N)
     return array([elems])
   end
-  registerFun(vsop, 'vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
+  A.registerFun(vsop, 'vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   return vsop
 end)
 
@@ -635,7 +635,7 @@ R.Relation.validFieldOffset = terralib.memoize(function(self)
     var x : self:fieldSpace()
     return [int64]([&int8](&(x.__valid)) - [&int8](&x))
   end
-  registerFun(getOffset, self:Name()..'_getOffset')
+  A.registerFun(getOffset, self:Name()..'_getOffset')
   return getOffset()
 end)
 
@@ -695,7 +695,7 @@ function R.Relation:emitValidInit()
       e.__valid = false
     end
   end
-  registerTask(initValidField, self:Name()..'_initValidField')
+  A.registerTask(initValidField, self:Name()..'_initValidField')
   return rquote initValidField([self:regionSymbol()]) end
 end
 
@@ -793,7 +793,7 @@ R.Relation.emitElemColor = terralib.memoize(function(self)
     -- calculate offsets.
     assert(false)
   end
-  registerTask(elemColor, self:Name()..'_elemColor')
+  A.registerTask(elemColor, self:Name()..'_elemColor')
   return elemColor
 end)
 
@@ -874,7 +874,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     var ptr : &int8 = [&int8](dst) + idx * [self:queueFieldSpace().N]
     C.memcpy(ptr, &src, [self:queueFieldSpace().N])
   end
-  registerFun(pushElement, self:Name()..'_pushElement')
+  A.registerFun(pushElement, self:Name()..'_pushElement')
   local terra getBasePointer(pr : RG.c.legion_physical_region_t,
                              fid : RG.c.legion_field_id_t,
                              runtime : RG.c.legion_runtime_t)
@@ -889,7 +889,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     RG.c.legion_accessor_array_1d_destroy(acc)
     return p
   end
-  registerFun(getBasePointer, self:Name()..'_getBasePointer')
+  A.registerFun(getBasePointer, self:Name()..'_getBasePointer')
   for i,stencil in ipairs(self:XferStencil()) do
     local q = RG.newsymbol(self:queueRegionType(), 'q'..(i-1))
     local qBasePtr = RG.newsymbol(&opaque, 'qBasePtr'..(i-1))
@@ -938,7 +938,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
       end
     end
   end
-  registerTask(pushAll, self:Name()..'_pushAll')
+  A.registerTask(pushAll, self:Name()..'_pushAll')
   return pushAll
 end)
 
@@ -957,7 +957,7 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
     C.memcpy(&dst, src, [self:queueRegionType().fspace_type.N])
     return dst
   end
-  registerFun(pullElement, self:Name()..'_pullElement')
+  A.registerFun(pullElement, self:Name()..'_pullElement')
   local task pullAll(color : int3d, r : self:regionType(), [queues])
   where reads writes(r), [privileges] do
     [queues:map(function(q) return rquote
@@ -979,7 +979,7 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
       end
     end end)]
   end
-  registerTask(pullAll, self:Name()..'_pullAll')
+  A.registerTask(pullAll, self:Name()..'_pullAll')
   return pullAll
 end)
 
@@ -1258,7 +1258,7 @@ function AST.UserFunction:toTask(info)
     do [body] end
   end
   -- Finalize task
-  registerTask(tsk, info.name)
+  A.registerTask(tsk, info.name)
   return tsk, ctxt
 end
 
@@ -1949,7 +1949,7 @@ if USE_HDF then
       HDF5.H5Sclose(dataSpace)
       HDF5.H5Fclose(fid)
     end
-    registerFun(create, self:Name()..'_hdf5create_'..flds:join('_'))
+    A.registerFun(create, self:Name()..'_hdf5create_'..flds:join('_'))
     local r = self:regionSymbol()
     local p_r = self:primPartSymbol()
     local s = self:copyRegionSymbol()
@@ -2146,7 +2146,7 @@ function M.AST.Print:toRQuote()
   local task print([formals])
     C.printf([self.fmt], [formals])
   end
-  registerTask(print, 'print')
+  A.registerTask(print, 'print')
   local actuals = self.globals:map(function(g) return g:varSymbol() end)
   return rquote
     print([actuals])
@@ -2267,7 +2267,7 @@ local function emitFillTaskCalls(fillStmts)
       end
     end
     fillTasks[rel] = tsk
-    registerTask(tsk, rel:Name()..'_fillTask')
+    A.registerTask(tsk, rel:Name()..'_fillTask')
   end
   local calls = newlist() -- RG.rquote*
   for rel,tsk in pairs(fillTasks) do
@@ -2408,7 +2408,7 @@ function A.translateAndRun(mapper_registration, link_flags)
     [header]
     __parallelize_with [opts] do [body] end
   end
-  registerTask(main, 'main')
+  A.registerTask(main, 'main')
   -- Emit to executable
   link_flags = link_flags or newlist()
   for idx = 1, #LIBS do
