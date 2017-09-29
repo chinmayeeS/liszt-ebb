@@ -56,30 +56,18 @@ end
 
 local DEBUG = os.getenv('DEBUG') == '1'
 
-local SAVEOBJ = os.getenv('SAVEOBJ') == '1'
+local LIBS = newlist({'-lm'})
 
 local OBJNAME = os.getenv('OBJNAME') or 'a.out'
 
+local HDF_LIBNAME = os.getenv('HDF_LIBNAME') or 'hdf5'
+
+local HDF_HEADER = os.getenv('HDF_HEADER') or 'hdf5.h'
+
 local USE_HDF = not (os.getenv('USE_HDF') == '0')
-
-local HDF_HEADER
 if USE_HDF then
-  if exists('/usr/include/hdf5/serial') then
-    HDF_HEADER = 'hdf5/serial/hdf5.h'
-  else
-    HDF_HEADER = 'hdf5.h'
-  end
-end
-
-local LIBS = newlist({'-lm'})
-if USE_HDF then
-  if exists('/usr/include/hdf5/serial') then
-    terralib.linklibrary('libhdf5_serial.so')
-    LIBS:insert('-lhdf5_serial')
-  else
-    terralib.linklibrary('libhdf5.so')
-    LIBS:insertall {'-L/usr/lib/x86_64-linux-gnu', '-lhdf' }
-  end
+  terralib.linklibrary('lib'..HDF_LIBNAME..'.so')
+  LIBS:insert('-l'..HDF_LIBNAME)
 end
 
 -- () -> int,int,int
@@ -218,16 +206,27 @@ local function prettyPrintFun(fun)
   end
 end
 
--- RG.Task -> ()
+-- RG.task -> ()
 local function prettyPrintTask(tsk)
   tsk:printpretty()
+end
+
+-- {string,terralib.type} | {field:string,type:terralib.type} ->
+--   string, terralib.type
+local function parseStructEntry(entry)
+  if terralib.israwlist(entry) and #entry == 2 then
+    return entry[1], entry[2]
+  elseif entry.field and entry.type then
+    return entry.field, entry.type
+  else assert(false) end
 end
 
 -- terralib.struct -> ()
 local function prettyPrintStruct(s)
   print('struct '..s.name..' {')
   for _,e in ipairs(s.entries) do
-    print('  '..e.field..' : '..tostring(e.type)..';')
+    local name, type = parseStructEntry(e)
+    print('  '..name..' : '..tostring(type)..';')
   end
   print('}')
 end
@@ -240,7 +239,7 @@ end
 local NAME_CACHE = {} -- map(string, (* -> *) | RG.task)
 
 -- RG.task, string -> ()
-local function registerTask(tsk, name)
+function A.registerTask(tsk, name)
   name = idSanitize(name)
   while NAME_CACHE[name] do
     name = name..'_'
@@ -258,7 +257,7 @@ local function registerTask(tsk, name)
 end
 
 -- (* -> *), string -> ()
-local function registerFun(fun, name)
+function A.registerFun(fun, name)
   name = idSanitize(name)
   while NAME_CACHE[name] do
     name = name..'_'
@@ -291,7 +290,7 @@ local emitDotProduct = terralib.memoize(function(T, N)
   local terra dot([a], [b]) : T
     return [expr]
   end
-  registerFun(dot, 'dot_'..tostring(T)..'_'..tostring(N))
+  A.registerFun(dot, 'dot_'..tostring(T)..'_'..tostring(N))
   return dot
 end)
 
@@ -311,7 +310,7 @@ local emitVectorVectorOp = terralib.memoize(function(op, T, N)
   local terra vvop([a], [b]) : Vector(T,N)
     return array([elems])
   end
-  registerFun(vvop, 'vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
+  A.registerFun(vvop, 'vv_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   return vvop
 end)
 
@@ -331,7 +330,7 @@ local emitVectorScalarOp = terralib.memoize(function(op, T, N)
   local terra vsop([a], [b]) : Vector(T,N)
     return array([elems])
   end
-  registerFun(vsop, 'vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
+  A.registerFun(vsop, 'vs_'..opName(op)..'_'..tostring(T)..'_'..tostring(N))
   return vsop
 end)
 
@@ -471,6 +470,16 @@ R.Relation.primPartSymbol = terralib.memoize(function(self)
   return RG.newsymbol(nil, self:Name()..'_primPart')
 end)
 
+-- () -> RG.symbol
+R.Relation.copyRegionSymbol = terralib.memoize(function(self)
+ return RG.newsymbol(nil, self:Name()..'_copy')
+end)
+
+-- () -> RG.symbol
+R.Relation.copyPrimPartSymbol = terralib.memoize(function(self)
+  return RG.newsymbol(nil, self:Name()..'_copy_primPart')
+end)
+
 -- () -> RG.symbol*
 R.Relation.queues = terralib.memoize(function(self)
   assert(self:isCoupled())
@@ -504,7 +513,7 @@ end)
 -- () -> RG.index_type
 function R.Relation:indexType()
   if self:isPlain() or self:isCoupled() then
-    return ptr
+    return int1d
   elseif self:isGrid() then
     return int3d
   else assert(false) end
@@ -555,13 +564,14 @@ R.Relation.validFieldOffset = terralib.memoize(function(self)
     var x : self:fieldSpace()
     return [int64]([&int8](&(x.__valid)) - [&int8](&x))
   end
+  A.registerFun(getOffset, self:Name()..'_getOffset')
   return getOffset()
 end)
 
 -- M.ExprConst -> RG.rexpr
 function R.Relation:translateIndex(lit)
   if self:isPlain() or self:isCoupled() then
-    return rexpr [ptr]([toRConst(lit, L.int)]) end
+    return rexpr [int1d]([toRConst(lit, L.int)]) end
   elseif self:isGrid() then
     assert(terralib.israwlist(lit))
     assert(#lit == 3)
@@ -580,41 +590,55 @@ end
 -- () -> RG.rexpr
 function R.Relation:emitISpaceInit()
   if self:isPlain() then
-    return rexpr ispace(ptr, [self:Size()]) end
+    return rexpr ispace(int1d, [self:Size()]) end
   elseif self:isGrid() then
     local dims = self:Dims()
     return rexpr
       ispace(int3d, { x = [dims[1]], y = [dims[2]], z = [dims[3]] })
     end
   elseif self:isCoupled() then
-    return rexpr ispace(ptr, [self:primPartSize()] * NUM_PRIM_PARTS) end
+    return rexpr ispace(int1d, [self:primPartSize()] * NUM_PRIM_PARTS) end
   else assert(false) end
 end
 
 -- () -> RG.rquote
 function R.Relation:emitRegionInit()
-  local rg = self:regionSymbol()
-  local ispaceExpr = self:emitISpaceInit()
-  local fspaceExpr = self:fieldSpace()
-  local declQuote = rquote var [rg] = region(ispaceExpr, fspaceExpr) end
-  local fillQuote = rquote end
-  if self:isCoupled() then
-    fillQuote = rquote fill(rg.__valid, false) end
-  end
+  local fs = self:fieldSpace()
   return rquote
-    [declQuote];
-    [fillQuote]
+    var is = [self:emitISpaceInit()]
+    var [self:regionSymbol()] = region(is, fs)
+    -- TODO:
+    -- single copy-region for every dump/load variant
+    -- declaring all fields on the copy-region, not just the ones dumped/loaded
+    var [self:copyRegionSymbol()] = region(is, fs)
   end
+end
+
+-- () -> RG.rquote
+function R.Relation:emitValidInit()
+  assert(self:isCoupled())
+  local initValidField
+  __demand(__parallel) task initValidField(r : self:regionType())
+  where writes(r.__valid) do
+    for e in r do
+      e.__valid = false
+    end
+  end
+  A.registerTask(initValidField, self:Name()..'_initValidField')
+  return rquote initValidField([self:regionSymbol()]) end
 end
 
 -- () -> RG.rquote
 function R.Relation:emitPrimPartInit()
   local r = self:regionSymbol()
-  local p = self:primPartSymbol()
+  local p_r = self:primPartSymbol()
+  local s = self:copyRegionSymbol()
+  local p_s = self:copyPrimPartSymbol()
   if self:isPlain() then
     assert(self:Size() % NUM_PRIM_PARTS == 0)
     return rquote
-      var [p] = partition(equal, r, [A.primColors()])
+      var [p_r] = partition(equal, r, [A.primColors()])
+      var [p_s] = partition(equal, s, [A.primColors()])
     end
   elseif self:isGrid() then
     -- Check for exact partitioning of grid interior
@@ -646,30 +670,31 @@ function R.Relation:emitPrimPartInit()
         if c.z == NZ-1 then rect.hi.z += [bd[3]] end
         RG.c.legion_domain_point_coloring_color_domain(coloring, c, rect)
       end
-      var [p] = partition(disjoint, r, coloring, [A.primColors()])
+      var [p_r] = partition(disjoint, r, coloring, [A.primColors()])
+      var [p_s] = partition(disjoint, s, coloring, [A.primColors()])
       RG.c.legion_domain_point_coloring_destroy(coloring)
     end
   elseif self:isCoupled() then
     local primPartSize = self:primPartSize()
     return rquote
-      var coloring = RG.c.legion_point_coloring_create()
+      var coloring = RG.c.legion_domain_point_coloring_create()
       for z = 0, NZ do
         for y = 0, NY do
           for x = 0, NX do
             var rBase : int64
             for rStart in r do
-              rBase = __raw(rStart).value + (z*NX*NY + y*NX + x) * primPartSize
+              rBase = rStart + (z*NX*NY + y*NX + x) * primPartSize
               break
             end
-            RG.c.legion_point_coloring_add_range(
-                coloring, int3d{x,y,z},
-                [RG.c.legion_ptr_t]{value = rBase},
-                [RG.c.legion_ptr_t]{value = rBase + primPartSize - 1})
+            RG.c.legion_domain_point_coloring_color_domain(
+              coloring, int3d{x,y,z},
+              [rect1d]{ rBase, rBase + primPartSize - 1 })
           end
         end
       end
-      var [p] = partition(disjoint, r, coloring, [A.primColors()])
-      RG.c.legion_point_coloring_destroy(coloring)
+      var [p_r] = partition(disjoint, r, coloring, [A.primColors()])
+      var [p_s] = partition(disjoint, s, coloring, [A.primColors()])
+      RG.c.legion_domain_point_coloring_destroy(coloring)
     end
   else assert(false) end
 end
@@ -697,7 +722,7 @@ R.Relation.emitElemColor = terralib.memoize(function(self)
     -- calculate offsets.
     assert(false)
   end
-  registerTask(elemColor, self:Name()..'_elemColor')
+  A.registerTask(elemColor, self:Name()..'_elemColor')
   return elemColor
 end)
 
@@ -708,7 +733,7 @@ function R.Relation:emitQueueInit(i)
   local size = self:MaxXferNum() * NUM_PRIM_PARTS
   local fspaceExpr = self:queueFieldSpace()
   return rquote
-    var [q] = region(ispace(ptr, size), fspaceExpr)
+    var [q] = region(ispace(int1d, size), fspaceExpr)
   end
 end
 
@@ -721,40 +746,37 @@ function R.Relation:emitQueuePartInit(i)
   local colors = A.primColors()
   local stencil = self:XferStencil()[i]
   return rquote
-    var srcColoring = RG.c.legion_point_coloring_create()
+    var srcColoring = RG.c.legion_domain_point_coloring_create()
     for z = 0, NZ do
       for y = 0, NY do
         for x = 0, NX do
           var qBase : int64
           for qStart in q do
-            qBase =
-              __raw(qStart).value + (z*NX*NY + y*NX + x) * [self:MaxXferNum()]
+            qBase = qStart + (z*NX*NY + y*NX + x) * [self:MaxXferNum()]
             break
           end
-          RG.c.legion_point_coloring_add_range(
-              srcColoring, int3d{x,y,z},
-              [RG.c.legion_ptr_t]{value = qBase},
-              [RG.c.legion_ptr_t]{value = qBase + [self:MaxXferNum()] - 1})
+          RG.c.legion_domain_point_coloring_color_domain(
+            srcColoring, int3d{x,y,z},
+            [rect1d]{ qBase, qBase + [self:MaxXferNum()] - 1 })
         end
       end
     end
     var [qSrcPart] = partition(disjoint, q, srcColoring, colors)
-    RG.c.legion_point_coloring_destroy(srcColoring)
-    var dstColoring = RG.c.legion_point_coloring_create()
+    RG.c.legion_domain_point_coloring_destroy(srcColoring)
+    var dstColoring = RG.c.legion_domain_point_coloring_create()
     var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
     for c in colors do
       var srcBase : int64
       for qptr in qSrcPart[(c - colorOff + {NX,NY,NZ}) % {NX,NY,NZ}] do
-        srcBase = __raw(qptr).value
+        srcBase = [int1d](qptr)
         break
       end
-      RG.c.legion_point_coloring_add_range(
+      RG.c.legion_domain_point_coloring_color_domain(
         dstColoring, c,
-        [RG.c.legion_ptr_t]{value = srcBase},
-        [RG.c.legion_ptr_t]{value = srcBase + [self:MaxXferNum()] - 1})
+        [rect1d]{ srcBase, srcBase + [self:MaxXferNum()] - 1 })
     end
     var [qDstPart] = partition(aliased, q, dstColoring, colors)
-    RG.c.legion_point_coloring_destroy(dstColoring)
+    RG.c.legion_domain_point_coloring_destroy(dstColoring)
   end
 end
 
@@ -781,7 +803,22 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     var ptr : &int8 = [&int8](dst) + idx * [self:queueFieldSpace().N]
     C.memcpy(ptr, &src, [self:queueFieldSpace().N])
   end
-  registerFun(pushElement, self:Name()..'_pushElement')
+  A.registerFun(pushElement, self:Name()..'_pushElement')
+  local terra getBasePointer(pr : RG.c.legion_physical_region_t,
+                             fid : RG.c.legion_field_id_t,
+                             runtime : RG.c.legion_runtime_t)
+    var acc = RG.c.legion_physical_region_get_field_accessor_array_1d(pr, fid)
+    var lr = RG.c.legion_physical_region_get_logical_region(pr)
+    var domain = RG.c.legion_index_space_get_domain(runtime, lr.index_space)
+    var rect = RG.c.legion_domain_get_rect_1d(domain)
+    var subrect : RG.c.legion_rect_1d_t
+    var offsets : RG.c.legion_byte_offset_t[1]
+    var p = RG.c.legion_accessor_array_1d_raw_rect_ptr(
+        acc, rect, &subrect, &(offsets[0]))
+    RG.c.legion_accessor_array_1d_destroy(acc)
+    return p
+  end
+  A.registerFun(getBasePointer, self:Name()..'_getBasePointer')
   for i,stencil in ipairs(self:XferStencil()) do
     local q = RG.newsymbol(self:queueRegionType(), 'q'..(i-1))
     local qBasePtr = RG.newsymbol(&opaque, 'qBasePtr'..(i-1))
@@ -792,16 +829,8 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
       for qPtr in [q] do
         [q][qPtr][ [self:validFieldOffset()] ] = [int8](false)
       end
-      var [qBasePtr]
-      do
-        var acc = RG.c.legion_physical_region_get_field_accessor_array
-                    (__physical([q])[0], __fields([q])[0])
-        for qPtr in [q] do
-          [qBasePtr] = RG.c.legion_accessor_array_ref(acc, __raw(qPtr))
-          break
-        end
-        RG.c.legion_accessor_array_destroy(acc)
-      end
+      var [qBasePtr] =
+        getBasePointer(__physical([q])[0], __fields([q])[0], __runtime())
     end)
     moveChecks:insert(rquote
       do
@@ -838,7 +867,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
       end
     end
   end
-  registerTask(pushAll, self:Name()..'_pushAll')
+  A.registerTask(pushAll, self:Name()..'_pushAll')
   return pushAll
 end)
 
@@ -857,7 +886,7 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
     C.memcpy(&dst, src, [self:queueRegionType().fspace_type.N])
     return dst
   end
-  registerFun(pullElement, self:Name()..'_pullElement')
+  A.registerFun(pullElement, self:Name()..'_pullElement')
   local task pullAll(color : int3d, r : self:regionType(), [queues])
   where reads writes(r), [privileges] do
     [queues:map(function(q) return rquote
@@ -869,6 +898,8 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
             if not rPtr.__valid then
               r[rPtr] = pullElement(q[qPtr])
               copied = true
+              RG.assert(r[rPtr].__valid,
+                'Pulled particle was not copied correctly')
               break
             end
           end
@@ -877,7 +908,7 @@ R.Relation.emitPullAll = terralib.memoize(function(self)
       end
     end end)]
   end
-  registerTask(pullAll, self:Name()..'_pullAll')
+  A.registerTask(pullAll, self:Name()..'_pullAll')
   return pullAll
 end)
 
@@ -1297,7 +1328,7 @@ function AST.UserFunction:toTask(info)
     do [body] end
   end
   -- Finalize task
-  registerTask(tsk, info.name)
+  A.registerTask(tsk, info.name)
   return tsk, ctxt
 end
 
@@ -1467,8 +1498,12 @@ function AST.Call:toRExpr(ctxt)
   -- Assertion
   -- self.params[1] : AST.Expression
   if self.func == L.assert then
-    return rexpr
-      RG.assert([self.params[1]:toRExpr(ctxt)], '(Liszt assertion)')
+    if RG.check_cuda_available() then
+      return rexpr 0 end
+    else
+      return rexpr
+        RG.assert([self.params[1]:toRExpr(ctxt)], '(Liszt assertion)')
+      end
     end
   end
   -- Key unboxing
@@ -1550,7 +1585,7 @@ function AST.Call:toRExpr(ctxt)
       return rexpr int3d{ [vals[1]], [vals[2]], [vals[3]] } end
     else
       assert(#vals == 1)
-      return rexpr [ptr]([vals[1]]) end
+      return rexpr [int1d]([vals[1]]) end
     end
   end
   -- Call to terra function
@@ -1881,37 +1916,41 @@ if USE_HDF then
   HDF5.H5F_ACC_TRUNC = 2
   HDF5.H5P_DEFAULT = 0
 
-  -- string* -> RG.task
-  -- TODO: Not caching the generated tasks.
-  function R.Relation:emitDump(flds)
+  -- string*, string, RG.rexpr* -> RG.rquote
+  function R.Relation:emitDump(flds, file, vals)
     local flds = flds:copy()
     if self:isCoupled() then
       assert(flds:find(self:CouplingField():Name()))
       flds:insert('__valid')
     end
-    local dims = self:Dims()
-    local nDims = #dims
-    local isType = self:indexSpaceType()
-    local fs = self:fieldSpace()
     local terra create(filename : rawstring)
-      var file = HDF5.H5Fcreate(filename, HDF5.H5F_ACC_TRUNC,
-                                HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
-      var sizes : HDF5.hsize_t[nDims]
+      var fid = HDF5.H5Fcreate(filename, HDF5.H5F_ACC_TRUNC,
+                               HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
+      var dataSpace : int32
       escape
-        if #dims == 1 then
+        if self:isPlain() then
           emit quote
-            sizes[0] = [dims[1]]
+            var sizes : HDF5.hsize_t[1]
+            sizes[0] = [self:Size()]
+            dataSpace = HDF5.H5Screate_simple(1, sizes, [&uint64](0))
           end
-        elseif #dims == 3 then
+        elseif self:isGrid() then
           emit quote
-            sizes[0] = [dims[1]]
-            sizes[1] = [dims[2]]
-            sizes[2] = [dims[3]]
+            -- Legion defaults to column-major layout, so we have to reverse.
+            -- This implies that x and z will be flipped in the output file.
+            var sizes : HDF5.hsize_t[3]
+            sizes[2] = [self:Dims()[1]]
+            sizes[1] = [self:Dims()[2]]
+            sizes[0] = [self:Dims()[3]]
+            dataSpace = HDF5.H5Screate_simple(3, sizes, [&uint64](0))
+          end
+        elseif self:isCoupled() then
+          emit quote
+            var sizes : HDF5.hsize_t[1]
+            sizes[0] = [self:primPartSize()] * NUM_PRIM_PARTS
+            dataSpace = HDF5.H5Screate_simple(1, sizes, [&uint64](0))
           end
         else assert(false) end
-      end
-      var dataSpace = HDF5.H5Screate_simple([#dims], sizes, [&uint64](0))
-      escape
         local header = newlist() -- terralib.quote*
         local footer = newlist() -- terralib.quote*
         -- terralib.type -> terralib.quote
@@ -1940,6 +1979,7 @@ if USE_HDF then
             header:insert(quote
               var dims : HDF5.hsize_t[1]
               dims[0] = T.N
+              var elemType = [elemType]
               var [arrayType] = HDF5.H5Tarray_create2(elemType, 1, dims)
             end)
             footer:insert(quote
@@ -1950,19 +1990,22 @@ if USE_HDF then
         end
         -- terralib.struct, set(string), string -> ()
         local function emitFieldDecls(fs, whitelist, prefix)
-           -- TODO: Only supporting pure structs, not fspaces
+          -- TODO: Only supporting pure structs, not fspaces
           assert(fs:isstruct())
-          for _,fld in ipairs(fs.entries) do
-            if whitelist and not whitelist[fld.field] then
-            elseif fld.type:isstruct() then
-              emitFieldDecls(fld.type, nil, prefix..fld.field..'.')
+          for _,e in ipairs(fs.entries) do
+            local name, type = parseStructEntry(e)
+            if whitelist and not whitelist[name] then
+              -- do nothing
+            elseif type:isstruct() then
+              emitFieldDecls(type, nil, prefix..name..'.')
             else
-              local hName = prefix..fld.field
-              local hType = toHType(fld.type)
+              local hName = prefix..name
+              local hType = toHType(type)
               local dataSet = symbol(HDF5.hid_t, 'dataSet')
               header:insert(quote
+                var hType = [hType]
                 var [dataSet] = HDF5.H5Dcreate2(
-                  file, hName, hType, dataSpace,
+                  fid, hName, hType, dataSpace,
                   HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
               end)
               footer:insert(quote
@@ -1971,55 +2014,63 @@ if USE_HDF then
             end
           end
         end
-        emitFieldDecls(fs, flds:toSet(), '')
+        emitFieldDecls(self:fieldSpace(), flds:toSet(), '')
         emit quote [header] end
         emit quote [footer:reverse()] end
       end
       HDF5.H5Sclose(dataSpace)
-      HDF5.H5Fclose(file)
+      HDF5.H5Fclose(fid)
     end
-    local dump __demand(__inline) task dump(r : region(isType, fs),
-                                            filename : rawstring)
-    where
-      reads(r.[flds])
-    do
+    A.registerFun(create, self:Name()..'_hdf5create_'..flds:join('_'))
+    local r = self:regionSymbol()
+    local p_r = self:primPartSymbol()
+    local s = self:copyRegionSymbol()
+    local p_s = self:copyPrimPartSymbol()
+    return rquote
+      var filename = [rawstring](C.malloc(256))
+      C.snprintf(filename, 256, file, vals)
       create(filename)
-      var s = region([self:emitISpaceInit()], fs)
       attach(hdf5, s.[flds], filename, RG.file_read_write)
-      acquire(s.[flds])
-      copy(r.[flds], s.[flds])
-      release(s.[flds])
+      for c in [A.primColors()] do
+        var p_r_c = p_r[c]
+        var p_s_c = p_s[c]
+        acquire(p_s_c.[flds])
+        copy(p_r_c.[flds], p_s_c.[flds])
+        release(p_s_c.[flds])
+      end
       detach(hdf5, s.[flds])
+      C.free(filename)
     end
-    registerFun(create, self:Name()..'_hdf5create_'..flds:join('_'))
-    registerTask(dump, self:Name()..'_hdf5dump_'..flds:join('_'))
-    return dump
   end
 
-  -- string* -> RG.task
-  -- TODO: Not caching the generated tasks.
-  function R.Relation:emitLoad(flds)
+  -- string*, string, RG.rexpr* -> RG.rquote
+  function R.Relation:emitLoad(flds, file, vals)
     local flds = flds:copy()
+    local primPartQuote = rquote end
     if self:isCoupled() then
       assert(flds:find(self:CouplingField():Name()))
       flds:insert('__valid')
+      primPartQuote = self:emitPrimPartCheck()
     end
-    local isType = self:indexSpaceType()
-    local fs = self:fieldSpace()
-    local load __demand(__inline) task load(r : region(isType, fs),
-                                            filename : rawstring)
-    where
-      reads writes(r.[flds])
-    do
-      var s = region([self:emitISpaceInit()], fs)
+    local r = self:regionSymbol()
+    local p_r = self:primPartSymbol()
+    local s = self:copyRegionSymbol()
+    local p_s = self:copyPrimPartSymbol()
+    return rquote
+      var filename = [rawstring](C.malloc(256))
+      C.snprintf(filename, 256, file, vals)
       attach(hdf5, s.[flds], filename, RG.file_read_only)
-      acquire(s.[flds])
-      copy(s.[flds], r.[flds])
-      release(s.[flds])
+      for c in [A.primColors()] do
+        var p_r_c = p_r[c]
+        var p_s_c = p_s[c]
+        acquire(p_s_c.[flds])
+        copy(p_s_c.[flds], p_r_c.[flds])
+        release(p_s_c.[flds])
+      end
       detach(hdf5, s.[flds])
+      C.free(filename)
+      [primPartQuote]
     end
-    registerTask(load, self:Name()..'_hdf5load_'..flds:join('_'))
-    return load
   end
 
 end -- if USE_HDF
@@ -2165,38 +2216,19 @@ function M.AST.Print:toRQuote()
   local task print([formals])
     C.printf([self.fmt], [formals])
   end
-  registerTask(print, 'print')
+  A.registerTask(print, 'print')
   local actuals = self.globals:map(function(g) return g:varSymbol() end)
   return rquote
     print([actuals])
   end
 end
 function M.AST.Dump:toRQuote()
-  local dump = self.rel:emitDump(self.flds)
-  local relSym = self.rel:regionSymbol()
   local valRExprs = self.vals:map(function(v) return v:toRExpr() end)
-  return rquote
-    var filename = [rawstring](C.malloc(256))
-    C.snprintf(filename, 256, [self.file], valRExprs)
-    dump(relSym, filename)
-    C.free(filename)
-  end
+  return self.rel:emitDump(self.flds, self.file, valRExprs)
 end
 function M.AST.Load:toRQuote()
-  local load = self.rel:emitLoad(self.flds)
-  local relSym = self.rel:regionSymbol()
   local valRExprs = self.vals:map(function(v) return v:toRExpr() end)
-  local primPartQuote = rquote end
-  if self.rel:isCoupled() then
-    primPartQuote = self.rel:emitPrimPartCheck()
-  end
-  return rquote
-    var filename = [rawstring](C.malloc(256))
-    C.snprintf(filename, 256, [self.file], valRExprs)
-    load(relSym, filename)
-    C.free(filename)
-    [primPartQuote]
-  end
+  return self.rel:emitLoad(self.flds, self.file, valRExprs)
 end
 function M.AST.Inline:toRQuote()
   return self.quot
@@ -2305,7 +2337,7 @@ local function emitFillTaskCalls(fillStmts)
       end
     end
     fillTasks[rel] = tsk
-    registerTask(tsk, rel:Name()..'_fillTask')
+    A.registerTask(tsk, rel:Name()..'_fillTask')
   end
   local calls = newlist() -- RG.rquote*
   for rel,tsk in pairs(fillTasks) do
@@ -2413,6 +2445,12 @@ function A.translateAndRun(mapper_registration, link_flags)
     end
   end
   body:insertall(emitFillTaskCalls(fillStmts))
+  for _,rel in ipairs(rels) do
+    if rel:isCoupled() then
+      body:insert(rel:emitValidInit())
+    end
+  end
+
   -- Process other statements
   for _,s in ipairs(M.stmts()) do
     if not M.AST.FillField.check(s) then
@@ -2447,16 +2485,11 @@ function A.translateAndRun(mapper_registration, link_flags)
     [header]
     __parallelize_with [opts] do [body] end
   end
-  registerTask(main, 'main')
-  -- Emit to executable or run
-  if SAVEOBJ then
-    print('Saving executable to '..OBJNAME)
-    link_flags = link_flags or newlist()
-    for idx = 1, #LIBS do
-      link_flags[#link_flags + 1] = LIBS[idx]
-    end
-    RG.saveobj(main, OBJNAME, 'executable', mapper_registration, link_flags)
-  else
-    RG.start(main, mapper_registration)
+  A.registerTask(main, 'main')
+  -- Emit to executable
+  link_flags = link_flags or newlist()
+  for idx = 1, #LIBS do
+    link_flags[#link_flags + 1] = LIBS[idx]
   end
+  RG.saveobj(main, OBJNAME, 'executable', mapper_registration, link_flags)
 end

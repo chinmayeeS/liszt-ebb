@@ -88,18 +88,18 @@ local function addHelpers(cells)
   cells:NewDivision(rectangles_3d(Cx, Cy, Cz, xn_bd, yn_bd, zn_bd))
 
   cells:NewFieldReadFunction('center', ebb(c)
-    return L.vec3d({ xo + xw * (L.double(L.xid(c)) + 0.5),
-                     yo + yw * (L.double(L.yid(c)) + 0.5),
-                     zo + zw * (L.double(L.zid(c)) + 0.5) })
+    return L.vec3d({ xo + xw / Cx * (L.double(L.xid(c)) + 0.5),
+                     yo + yw / Cy * (L.double(L.yid(c)) + 0.5),
+                     zo + zw / Cz * (L.double(L.zid(c)) + 0.5) })
   end)
 
   local xsnap = cells._periodic[1] and wrap_idx or clamp_idx
   local ysnap = cells._periodic[2] and wrap_idx or clamp_idx
   local zsnap = cells._periodic[3] and wrap_idx or clamp_idx
   rawset(cells, 'locate', L.Macro(function(pos)
-    return ebb `L.UNSAFE_ROW({xsnap((pos[0] - xo) / xw, Cx),
-                              ysnap((pos[1] - yo) / yw, Cy),
-                              zsnap((pos[2] - zo) / zw, Cz)}, cells)
+    return ebb `L.UNSAFE_ROW({xsnap((pos[0] - xo) / xw * Cx, Cx),
+                              ysnap((pos[1] - yo) / yw * Cy, Cy),
+                              zsnap((pos[2] - zo) / zw * Cz, Cz)}, cells)
   end))
 
   -- boundary depths
