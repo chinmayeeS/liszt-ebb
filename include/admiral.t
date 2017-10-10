@@ -1996,6 +1996,41 @@ if USE_HDF then
             local name, type = parseStructEntry(e)
             if whitelist and not whitelist[name] then
               -- do nothing
+            elseif type == int2d then
+              -- Hardcode special case: int2d structs are stored packed
+              local hName = prefix..name
+              local int2dType = symbol(HDF5.hid_t, 'int2dType')
+              local dataSet = symbol(HDF5.hid_t, 'dataSet')
+              header:insert(quote
+                var [int2dType] = HDF5.H5Tcreate(HDF5.H5T_COMPOUND, 16)
+                HDF5.H5Tinsert(int2dType, "x", 0, HDF5.H5T_STD_I64LE_g)
+                HDF5.H5Tinsert(int2dType, "y", 8, HDF5.H5T_STD_I64LE_g)
+                var [dataSet] = HDF5.H5Dcreate2(
+                  fid, hName, int2dType, dataSpace,
+                  HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
+              end)
+              footer:insert(quote
+                HDF5.H5Dclose(dataSet)
+                HDF5.H5Tclose(int2dType)
+              end)
+            elseif type == int3d then
+              -- Hardcode special case: int3d structs are stored packed
+              local hName = prefix..name
+              local int3dType = symbol(HDF5.hid_t, 'int3dType')
+              local dataSet = symbol(HDF5.hid_t, 'dataSet')
+              header:insert(quote
+                var [int3dType] = HDF5.H5Tcreate(HDF5.H5T_COMPOUND, 24)
+                HDF5.H5Tinsert(int3dType, "x", 0, HDF5.H5T_STD_I64LE_g)
+                HDF5.H5Tinsert(int3dType, "y", 8, HDF5.H5T_STD_I64LE_g)
+                HDF5.H5Tinsert(int3dType, "z", 16, HDF5.H5T_STD_I64LE_g)
+                var [dataSet] = HDF5.H5Dcreate2(
+                  fid, hName, int3dType, dataSpace,
+                  HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
+              end)
+              footer:insert(quote
+                HDF5.H5Dclose(dataSet)
+                HDF5.H5Tclose(int3dType)
+              end)
             elseif type:isstruct() then
               emitFieldDecls(type, nil, prefix..name..'.')
             else
