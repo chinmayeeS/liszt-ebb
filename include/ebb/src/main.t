@@ -85,6 +85,7 @@ local ADT AST
        | GetGlobal { global : Global }
        | BinaryOp { op : string, lhs : Expr, rhs : Expr }
        | UnaryOp { op : string, arg : Expr }
+       | ReadConfig { name : string }
   extern ExprConst isExprConst
   extern Field     isField
   extern Function  isFunction

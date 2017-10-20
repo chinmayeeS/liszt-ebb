@@ -309,6 +309,15 @@ function Exports.copy_table(tbl)
   return cpy
 end
 
+-- table -> int
+function Exports.tableSize(tbl)
+  local size = 0
+  for _,_ in pairs(tbl) do
+    size = size + 1
+  end
+  return size
+end
+
 ------------------------------------------------------------------------------
 --[[ Lists                                                                ]]--
 ------------------------------------------------------------------------------

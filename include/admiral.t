@@ -56,7 +56,7 @@ end
 
 local DEBUG = os.getenv('DEBUG') == '1'
 
-local LIBS = newlist({'-lm'})
+local LIBS = newlist({'-lm', '-ljsonparser'})
 
 local OBJNAME = os.getenv('OBJNAME') or 'a.out'
 
@@ -66,7 +66,6 @@ local HDF_HEADER = os.getenv('HDF_HEADER') or 'hdf5.h'
 
 local USE_HDF = not (os.getenv('USE_HDF') == '0')
 if USE_HDF then
-  terralib.linklibrary('lib'..HDF_LIBNAME..'.so')
   LIBS:insert('-l'..HDF_LIBNAME)
 end
 
@@ -2111,6 +2110,137 @@ if USE_HDF then
 end -- if USE_HDF
 
 -------------------------------------------------------------------------------
+-- Parsing configuration values
+-------------------------------------------------------------------------------
+
+local JSON = terralib.includec('json.h')
+
+local Enum = {}
+
+-- string* -> Enum
+function A.Enum(...)
+  local enum = setmetatable({}, Enum)
+  enum.__choices = {...}
+  for i,val in ipairs({...}) do
+    assert(type(val) == 'string')
+    enum[val] = i-1
+  end
+  return enum
+end
+
+-- RG.symbol
+local CONFIG_SYMBOL = RG.newsymbol(nil, 'config')
+
+-- string -> terralib.type | Enum
+local CONFIG_VALUES = {}
+
+-- () -> terralib.struct
+local configStruct = terralib.memoize(function()
+  local s = terralib.types.newstruct('Config')
+  for name,type in pairs(CONFIG_VALUES) do
+    if getmetatable(type) == Enum then
+      s.entries:insert({field=name, type=int})
+    else
+      s.entries:insert({field=name, type=type})
+    end
+  end
+  if DEBUG then prettyPrintStruct(s) end
+  return s
+end)
+
+-- terralib.quote
+local errorOut = quote
+  C.fprintf(C.stderr, 'Error while parsing configuration\n')
+  C.exit(1)
+end
+
+-- terralib.expr, terralib.expr, terralib.type | Enum -> terralib.quote
+local function emitValueParser(lval, rval, type)
+  if getmetatable(type) == Enum then
+    return quote
+      if [rval].type ~= JSON.json_string then [errorOut] end
+      var found = false
+      escape for i,choice in ipairs(type.__choices) do emit quote
+        if C.strcmp([rval].u.string.ptr, choice) == 0 then
+          [lval] = i-1
+          found = true
+        end
+      end end end
+      if not found then [errorOut] end
+    end
+  elseif type == int then
+    return quote
+      if [rval].type ~= JSON.json_integer then [errorOut] end
+      [lval] = [rval].u.integer
+    end
+  elseif type == double then
+    return quote
+      if [rval].type ~= JSON.json_double then [errorOut] end
+      [lval] = [rval].u.dbl
+    end
+  elseif type:isarray() and type.type == double then
+    return quote
+      if [rval].type ~= JSON.json_array then [errorOut] end
+      if [rval].u.array.length ~= [type.N] then [errorOut] end
+      for i = 0,[type.N] do
+        var rval_i = [rval].u.array.values[i]
+        if rval_i.type ~= JSON.json_double then [errorOut] end
+        [lval][i] = rval_i.u.dbl
+      end
+    end
+  else assert(false) end
+end
+
+-- () -> (&int8 -> ...)
+local emitConfigParser = terralib.memoize(function()
+  local configStruct = configStruct()
+  local terra parseConfig(filename : &int8)
+    var config = [&configStruct](C.malloc(sizeof(configStruct)))
+    if config == nil then [errorOut] end
+    var f = C.fopen(filename, 'r');       if f == nil then [errorOut] end
+    var res1 = C.fseek(f, 0, C.SEEK_END); if res1 ~= 0 then [errorOut] end
+    var len = C.ftell(f);                 if len < 0 then [errorOut] end
+    var res2 = C.fseek(f, 0, C.SEEK_SET); if res2 ~= 0 then [errorOut] end
+    var buf = [&int8](C.malloc(len));     if buf == nil then [errorOut] end
+    var res3 = C.fread(buf, 1, len, f);   if res3 < len then [errorOut] end
+    C.fclose(f);
+    var totalParsed = 0
+    var root = JSON.json_parse(buf, len)
+    if root.type ~= JSON.json_object then [errorOut] end
+    for i = 0,root.u.object.length do
+      var node_name = root.u.object.values[i].name
+      var node_value = root.u.object.values[i].value
+      var parsed = false
+      escape for def_name,def_type in pairs(CONFIG_VALUES) do emit quote
+          if C.strcmp(def_name, node_name) == 0 then
+            [emitValueParser(`config.[def_name], node_value, def_type)]
+            parsed = true
+          end
+      end end end
+      if parsed then totalParsed = totalParsed + 1 else [errorOut] end
+    end
+    -- TODO: Assuming the json file contains no duplicate values
+    if totalParsed < [UTIL.tableSize(CONFIG_VALUES)] then [errorOut] end
+    JSON.json_value_free(root)
+    C.free(buf)
+    return config
+  end
+  A.registerFun(parseConfig, 'parseConfig')
+  return parseConfig
+end)
+
+-- string, terralib.type | Enum -> M.AST.Expr
+function A.readConfig(name, type)
+  assert(getmetatable(type) == Enum or terralib.types.istype(type))
+  if CONFIG_VALUES[name] then
+    assert(CONFIG_VALUES[name] == type)
+  else
+    CONFIG_VALUES[name] = type
+  end
+  return M.AST.ReadConfig(name)
+end
+
+-------------------------------------------------------------------------------
 -- Control program translation
 -------------------------------------------------------------------------------
 
@@ -2327,6 +2457,9 @@ function M.AST.UnaryOp:toRExpr()
     (self.op == '-') and rexpr -a end or
     assert(false)
 end
+function M.AST.ReadConfig:toRExpr()
+  return rexpr CONFIG_SYMBOL.[self.name] end
+end
 
 -- M.AST.FillField -> RG.rquote*
 local function emitFillTaskCalls(fillStmts)
@@ -2411,6 +2544,16 @@ function A.translateAndRun(mapper_registration, link_flags)
       -- Do nothing
     else assert(false) end
   end
+  -- Emit configuration parsing
+  local parseConfig = emitConfigParser()
+  header:insert(rquote
+    var args = RG.c.legion_runtime_get_input_args()
+    if args.argc < 2 or args.argv[1][0] == 45 then -- 45 == '-'
+      C.fprintf(C.stderr, 'Usage: %s <config.json> ...\n', args.argv[0])
+      C.exit(1)
+    end
+    var [CONFIG_SYMBOL] = parseConfig(args.argv[1])
+  end)
   -- Emit global declarations
   for g,val in pairs(globalInits) do
     header:insert(rquote
@@ -2485,7 +2628,6 @@ function A.translateAndRun(mapper_registration, link_flags)
       body:insert(rel:emitValidInit())
     end
   end
-
   -- Process other statements
   for _,s in ipairs(M.stmts()) do
     if not M.AST.FillField.check(s) then
