@@ -2108,11 +2108,10 @@ function M.AST.Do:toRQuote()
 end
 function M.AST.Trace:toRQuote()
   return rquote
-    RG.c.legion_runtime_begin_trace(__runtime(), __context(), 0)
+    __demand(__trace)
     do
       [self.body:toRQuote()]
     end
-    RG.c.legion_runtime_end_trace(__runtime(), __context(), 0)
   end
 end
 function M.AST.Print:toRQuote()
