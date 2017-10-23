@@ -2150,7 +2150,7 @@ end)
 
 -- terralib.quote
 local errorOut = quote
-  C.fprintf(C.stderr, 'Error while parsing configuration\n')
+  C.printf('Error while parsing configuration\n')
   C.exit(1)
 end
 
@@ -2549,7 +2549,7 @@ function A.translateAndRun(mapper_registration, link_flags)
   header:insert(rquote
     var args = RG.c.legion_runtime_get_input_args()
     if args.argc < 2 or args.argv[1][0] == 45 then -- 45 == '-'
-      C.fprintf(C.stderr, 'Usage: %s <config.json> ...\n', args.argv[0])
+      C.printf('Usage: %s <config.json> ...\n', args.argv[0])
       C.exit(1)
     end
     var [CONFIG_SYMBOL] = parseConfig(args.argv[1])
