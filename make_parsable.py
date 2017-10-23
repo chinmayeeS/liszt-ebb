@@ -43,6 +43,8 @@ for line in fileinput.input():
     line = line.replace('std.', 'regentlib.')
     # Remove unparsable terra annotations
     line = re.sub(r'extern global (.*) : \w+', r'\1', line)
+    # (@x). -> x.
+    line = re.sub(r'\(@(\w+)\)\.', r'\1.', line)
     # Print filtered line
     print line
 
