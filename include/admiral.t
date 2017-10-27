@@ -1181,6 +1181,9 @@ function AST.UserFunction:toTask(info)
   assert(not ctxt.reducedGlobal or not self.exp)
   -- Synthesize body
   local body = newlist() -- RG.quote*
+  if info.timing == "pre" then
+    body:insert(rquote RG.c.printf("t: %ld\n", RG.c.legion_get_current_time_in_micros()) end)
+  end
   if ctxt.reducedGlobal then
     local accInitVal =
       opIdentity(ctxt.globalReduceOp, ctxt.globalReduceAcc:gettype())
@@ -1207,6 +1210,9 @@ function AST.UserFunction:toTask(info)
   end
   if self.exp then
     body:insert(rquote return [self.exp:toRExpr(ctxt)] end)
+  end
+  if info.timing == "post" then
+    body:insert(rquote RG.c.printf("t: %ld\n", RG.c.legion_get_current_time_in_micros()) end)
   end
   -- Synthesize task
   local tsk
@@ -1263,6 +1269,7 @@ function F.Function:toKernelTask()
   -- }
   info.name = self:Name()
   info.domainRel = argRel
+  info.timing = self.timing
   local tsk, ctxt = typedAST:toTask(info)
   TO_KERNEL_TASK_CACHE[self] = {tsk, ctxt}
   return tsk, ctxt
