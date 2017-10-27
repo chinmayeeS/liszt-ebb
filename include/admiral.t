@@ -1132,6 +1132,13 @@ function FunContext.New(info, argNames, argTypes)
       self.globalReduceOp = pt.reduceop
     else assert(false) end
   end
+  if info.timing ~= nil then
+    local g = info.timing.variable
+    if self.globalMap[g] == nil then
+      self.globalMap[g] = RG.newsymbol(toRType(g:Type()), idSanitize(g:Name()))
+      self.readGlobals:insert(g)
+    end
+  end
   return self
 end
 
@@ -1181,8 +1188,18 @@ function AST.UserFunction:toTask(info)
   assert(not ctxt.reducedGlobal or not self.exp)
   -- Synthesize body
   local body = newlist() -- RG.quote*
-  if info.timing == "pre" then
-    body:insert(rquote RG.c.printf("t: %ld\n", RG.c.legion_get_current_time_in_micros()) end)
+  local timing = nil
+  if info.timing ~= nil then
+    local cond =
+      rexpr [ctxt.globalMap[info.timing.variable]] == [info.timing.target] end
+    timing = rquote
+      if [cond] then
+        RG.c.printf("t: %ld\n", RG.c.legion_get_current_time_in_micros())
+      end
+    end
+  end
+  if info.timing ~= nil and info.timing.kind == "pre" then
+    body:insert(timing)
   end
   if ctxt.reducedGlobal then
     local accInitVal =
@@ -1211,8 +1228,8 @@ function AST.UserFunction:toTask(info)
   if self.exp then
     body:insert(rquote return [self.exp:toRExpr(ctxt)] end)
   end
-  if info.timing == "post" then
-    body:insert(rquote RG.c.printf("t: %ld\n", RG.c.legion_get_current_time_in_micros()) end)
+  if info.timing ~= nil and info.timing.kind == "post" then
+    body:insert(timing)
   end
   -- Synthesize task
   local tsk
