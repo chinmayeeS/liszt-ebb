@@ -2540,8 +2540,6 @@ function A.translateAndRun(mapper_registration, link_flags)
       globalInits[decl.global] = decl.init
     elseif M.AST.NewRelation.check(decl) then
       rels:insert(decl.rel)
-    elseif M.AST.NewDivision.check(decl) then
-      -- Do nothing
     else assert(false) end
   end
   -- Emit configuration parsing
@@ -2560,46 +2558,9 @@ function A.translateAndRun(mapper_registration, link_flags)
       var [g:varSymbol()] = [toRConst(val, g:Type())]
     end)
   end
-  -- Emit region declarations and user-defined divisions
+  -- Emit region declarations
   for _,rel in ipairs(rels) do
     header:insert(rel:emitRegionInit())
-    for _,div in ipairs(rel:Divisions()) do
-      local colors = RG.newsymbol(nil, 'colors')
-      local coloring = RG.newsymbol(nil, 'coloring')
-      header:insert(rquote
-        var [colors] = ispace(int1d, [#div])
-        var [coloring] = RG.c.legion_domain_point_coloring_create()
-      end)
-      for i,subset in ipairs(div) do
-        local rect = subset:Rectangle() -- int[1-3][2]
-        local rectExpr =
-          (#rect == 1) and rexpr
-            rect1d{ lo = [rect[1][1]], hi = [rect[1][2]] }
-          end or
-          (#rect == 3) and rexpr
-            rect3d{
-              lo = int3d{ x=[rect[1][1]], y=[rect[2][1]], z=[rect[3][1]] },
-              hi = int3d{ x=[rect[1][2]], y=[rect[2][2]], z=[rect[3][2]] }}
-          end or
-          assert(false)
-        header:insert(rquote
-          RG.c.legion_domain_point_coloring_color_domain
-            (coloring, int1d(i-1), rectExpr)
-        end)
-      end
-      local p = RG.newsymbol(nil, 'p')
-      header:insert(rquote
-        var [p] = partition(disjoint, [rel:regionSymbol()], coloring, colors)
-      end)
-      for i,subset in ipairs(div) do
-        header:insert(rquote
-          var [subset:subRegionSymbol()] = p[i-1]
-        end)
-      end
-      header:insert(rquote
-        RG.c.legion_domain_point_coloring_destroy(coloring)
-      end)
-    end
   end
   -- Emit primary partitioning scheme
   header:insert(rquote

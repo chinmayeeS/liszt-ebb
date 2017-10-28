@@ -175,7 +175,6 @@ function R.NewRelation(params)
     _mode       = params.mode,
     _uid        = relation_uid,
     _fields     = terralib.newlist(),
-    _divisions  = terralib.newlist(),
     _macros     = terralib.newlist(),
     _functions  = terralib.newlist(),
   }, Relation)
@@ -241,10 +240,6 @@ end
 
 function Relation:Fields()
   return self._fields
-end
-
-function Relation:Divisions()
-  return self._divisions
 end
 
 function Relation:foreach(user_func, ...)
@@ -472,51 +467,6 @@ local function is_subrectangle(rel, obj)
     end
   end
   return true
-end
-
-function Relation:NewDivision( rects )
-  if not self:isGrid() then
-    error("NewDivision(): Can only be called on grid-typed relations", 2)
-  end
-  local division = terralib.newlist()
-  for name,rect in pairs(rects) do
-    if type(name) ~= "string" then
-      error("NewDivision(): Subset names must be strings", 2)
-    end
-    if not is_valid_lua_identifier(name) then
-      error(valid_name_err_msg.subset, 2)
-    end
-    if self[name] then
-      error("Cannot create a new subset with name '"..name.."'  "..
-              "That name is already being used.", 2)
-    end
-    if not type(rect) == 'table' or not terralib.israwlist(rect) then
-      error("NewDivision(): Rectangles must be lists", 2)
-    end
-    if is_subrectangle(self, rect) then
-      local subset = setmetatable({
-        _owner     = self,
-        _name      = name,
-        _rectangle = rect,
-      }, Subset)
-      rawset(self, name, subset)
-      division:insert(subset)
-    end
-    --if not is_subrectangle(self, rect) then
-    --  error("NewDivision(): Rectangle was not a list of "..(#self:Dims())..
-    --        " range pairs lying inside the grid", 2)
-    --end
-    ---- TODO: Assuming the rectangles are disjoint, and cover the entire grid.
-    --local subset = setmetatable({
-    --  _owner     = self,
-    --  _name      = name,
-    --  _rectangle = rect,
-    --}, Subset)
-    --rawset(self, name, subset)
-    --division:insert(subset)
-  end
-  self._divisions:insert(division)
-  M.decls():insert(M.AST.NewDivision(division))
 end
 
 -------------------------------------------------------------------------------

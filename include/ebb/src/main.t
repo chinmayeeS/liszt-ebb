@@ -64,7 +64,6 @@ local ADT AST
        | NewFunction { fun : Function }
        | NewGlobal { global : Global, init : ExprConst }
        | NewRelation { rel : Relation }
-       | NewDivision { subsets : Subset* }
   Stmt = Block { stmts : Stmt* }
        | ForEach { fun : Function, rel : Relation, subset : Subset? }
        | If { cond : Cond, thenBlock : Stmt?, elseBlock : Stmt? }

@@ -57,18 +57,6 @@ end)
 
 -------------------------------------------------------------------------------
 
-local function rectangles_3d(X, Y, Z, xb, yb, zb)
-  return {
-    boundary_xneg = { {0,xb-1},    {0,Y-1},     {0,Z-1}     },
-    boundary_xpos = { {X-xb,X-1},  {0,Y-1},     {0,Z-1}     },
-    boundary_yneg = { {xb,X-xb-1}, {0,yb-1},    {0,Z-1}     },
-    boundary_ypos = { {xb,X-xb-1}, {Y-yb,Y-1},  {0,Z-1}     },
-    boundary_zneg = { {xb,X-xb-1}, {yb,Y-yb-1}, {0,zb-1}    },
-    boundary_zpos = { {xb,X-xb-1}, {yb,Y-yb-1}, {Z-zb,Z-1}  },
-    interior      = { {xb,X-xb-1}, {yb,Y-yb-1}, {zb,Z-zb-1} },
-  }
-end
-
 local function addHelpers(cells)
   local Cx, Cy, Cz  = cells._dims[1], cells._dims[2], cells._dims[3]
   local xw, yw, zw  = cells._width[1], cells._width[2], cells._width[3]
@@ -83,9 +71,6 @@ local function addHelpers(cells)
                                    {0,1,0,y},
                                    {0,0,1,z}}, c)
   end))
-
-  -- Boundary/Interior subsets
-  cells:NewDivision(rectangles_3d(Cx, Cy, Cz, xn_bd, yn_bd, zn_bd))
 
   cells:NewFieldReadFunction('center', ebb(c)
     return L.vec3d({ xo + xw / Cx * (L.double(L.xid(c)) + 0.5),
