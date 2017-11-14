@@ -62,7 +62,7 @@ M.isExprConst = isExprConst
 local ADT AST
   Decl = NewField { fld : Field }
        | NewFunction { fun : Function }
-       | NewGlobal { global : Global, init : ExprConst }
+       | NewGlobal { global : Global, init : Expr }
        | NewRelation { rel : Relation }
   Stmt = Block { stmts : Stmt* }
        | ForEach { fun : Function, rel : Relation, subset : Subset? }

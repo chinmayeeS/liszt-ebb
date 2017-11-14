@@ -70,11 +70,14 @@ function Pre.NewGlobal (name, typ, init)
   if not T.istype(typ) or not typ:isvalue() then
     error("Second argument to Global() must be an Ebb value type", 2)
   end
-  if not T.luaValConformsToType(init, typ) then
-    error("Third argument to Global() must be an "..
-          "instance of type " .. tostring(typ), 2)
+  if M.isExprConst(init) then
+    -- Lift lua constant to AST node.
+    if not T.luaValConformsToType(init, typ) then
+      error("Third argument to Global() must be an "..
+            "instance of type " .. tostring(typ), 2)
+    end
+    init = M.AST.Const(init)
   end
-
   local s  = setmetatable({_name=name, _type=typ}, Global)
   M.decls():insert(M.AST.NewGlobal(s, init))
   return s

@@ -2529,7 +2529,7 @@ function A.translateAndRun(mapper_registration, link_flags)
   local header = newlist() -- RG.rquote*
   local body = newlist() -- RG.rquote*
   -- Collect declarations
-  local globalInits = {} -- map(PRE.Global, M.ExprConst)
+  local globalInits = {} -- map(PRE.Global, M.AST.Expr)
   local rels = newlist() -- R.Relation*
   for _,decl in ipairs(M.decls()) do
     if M.AST.NewField.check(decl) then
@@ -2553,9 +2553,9 @@ function A.translateAndRun(mapper_registration, link_flags)
     var [CONFIG_SYMBOL] = parseConfig(args.argv[1])
   end)
   -- Emit global declarations
-  for g,val in pairs(globalInits) do
+  for g,init in pairs(globalInits) do
     header:insert(rquote
-      var [g:varSymbol()] = [toRConst(val, g:Type())]
+      var [g:varSymbol()] = [init:toRExpr()]
     end)
   end
   -- Emit region declarations
