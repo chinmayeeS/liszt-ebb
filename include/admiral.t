@@ -56,7 +56,7 @@ end
 
 local DEBUG = os.getenv('DEBUG') == '1'
 
-local LIBS = newlist({'-lm', '-ljsonparser'})
+local LIBS = newlist({'-ljsonparser', '-lm'})
 
 local OBJNAME = os.getenv('OBJNAME') or 'a.out'
 
@@ -2110,7 +2110,7 @@ if USE_HDF then
 end -- if USE_HDF
 
 -------------------------------------------------------------------------------
--- Parsing configuration values
+-- Parsing runtime configuration values
 -------------------------------------------------------------------------------
 
 local JSON = terralib.includec('json.h')
@@ -2128,23 +2128,38 @@ function A.Enum(...)
   return enum
 end
 
+-- A -> bool
+local function equalsDoubleVec(x)
+  return terralib.types.istype(x) and x:isarray() and x.type == double
+end
+
+-- ConfigMap = map(string,ConfigKind)
+-- ConfigKind = Enum | int | double | double[N] | ConfigMap
+
 -- RG.symbol
 local CONFIG_SYMBOL = RG.newsymbol(nil, 'config')
 
--- string -> terralib.type | Enum
-local CONFIG_VALUES = {}
+-- ConfigMap
+local CONFIG_MAP = {}
 
 -- () -> terralib.struct
 local configStruct = terralib.memoize(function()
-  local s = terralib.types.newstruct('Config')
-  for name,type in pairs(CONFIG_VALUES) do
-    if getmetatable(type) == Enum then
-      s.entries:insert({field=name, type=int})
-    else
-      s.entries:insert({field=name, type=type})
+  local function fillStruct(struct_, map)
+    for fld,kind in pairs(map) do
+      if getmetatable(kind) == Enum then
+        struct_.entries:insert({field=fld, type=int})
+      elseif kind == int or kind == double or equalsDoubleVec(kind) then
+        struct_.entries:insert({field=fld, type=kind})
+      else
+        local nested = terralib.types.newstruct(fld)
+        fillStruct(nested, kind)
+        struct_.entries:insert({field=fld, type=nested})
+      end
     end
+    if DEBUG then prettyPrintStruct(struct_) end
   end
-  if DEBUG then prettyPrintStruct(s) end
+  local s = terralib.types.newstruct('Config')
+  fillStruct(s, CONFIG_MAP)
   return s
 end)
 
@@ -2154,13 +2169,13 @@ local errorOut = quote
   C.exit(1)
 end
 
--- terralib.expr, terralib.expr, terralib.type | Enum -> terralib.quote
-local function emitValueParser(lval, rval, type)
-  if getmetatable(type) == Enum then
+-- terralib.expr, terralib.expr, ConfigKind -> terralib.quote
+local function emitValueParser(lval, rval, kind)
+  if getmetatable(kind) == Enum then
     return quote
       if [rval].type ~= JSON.json_string then [errorOut] end
       var found = false
-      escape for i,choice in ipairs(type.__choices) do emit quote
+      escape for i,choice in ipairs(kind.__choices) do emit quote
         if C.strcmp([rval].u.string.ptr, choice) == 0 then
           [lval] = i-1
           found = true
@@ -2168,35 +2183,53 @@ local function emitValueParser(lval, rval, type)
       end end end
       if not found then [errorOut] end
     end
-  elseif type == int then
+  elseif kind == int then
     return quote
       if [rval].type ~= JSON.json_integer then [errorOut] end
       [lval] = [rval].u.integer
     end
-  elseif type == double then
+  elseif kind == double then
     return quote
       if [rval].type ~= JSON.json_double then [errorOut] end
       [lval] = [rval].u.dbl
     end
-  elseif type:isarray() and type.type == double then
+  elseif equalsDoubleVec(kind) then
     return quote
       if [rval].type ~= JSON.json_array then [errorOut] end
-      if [rval].u.array.length ~= [type.N] then [errorOut] end
-      for i = 0,[type.N] do
+      if [rval].u.array.length ~= [kind.N] then [errorOut] end
+      for i = 0,[kind.N] do
         var rval_i = [rval].u.array.values[i]
         if rval_i.type ~= JSON.json_double then [errorOut] end
         [lval][i] = rval_i.u.dbl
       end
     end
-  else assert(false) end
+  else
+    return quote
+      var totalParsed = 0
+      if [rval].type ~= JSON.json_object then [errorOut] end
+      for i = 0,[rval].u.object.length do
+        var nodeName = [rval].u.object.values[i].name
+        var nodeValue = [rval].u.object.values[i].value
+        var parsed = false
+        escape for fld,subKind in pairs(kind) do emit quote
+          if C.strcmp(nodeName, fld) == 0 then
+            [emitValueParser(`[lval].[fld], nodeValue, subKind)]
+            parsed = true
+          end
+        end end end
+        if parsed then totalParsed = totalParsed + 1 else [errorOut] end
+      end
+      -- TODO: Assuming the json file contains no duplicate values
+      if totalParsed < [UTIL.tableSize(kind)] then [errorOut] end
+    end
+  end
 end
 
 -- () -> (&int8 -> ...)
 local emitConfigParser = terralib.memoize(function()
   local configStruct = configStruct()
-  local terra parseConfig(filename : &int8)
-    var config = [&configStruct](C.malloc(sizeof(configStruct)))
-    if config == nil then [errorOut] end
+  local terra parseConfig(filename : &int8) : configStruct
+    var config : configStruct
     var f = C.fopen(filename, 'r');       if f == nil then [errorOut] end
     var res1 = C.fseek(f, 0, C.SEEK_END); if res1 ~= 0 then [errorOut] end
     var len = C.ftell(f);                 if len < 0 then [errorOut] end
@@ -2204,23 +2237,11 @@ local emitConfigParser = terralib.memoize(function()
     var buf = [&int8](C.malloc(len));     if buf == nil then [errorOut] end
     var res3 = C.fread(buf, 1, len, f);   if res3 < len then [errorOut] end
     C.fclose(f);
-    var totalParsed = 0
-    var root = JSON.json_parse(buf, len)
-    if root.type ~= JSON.json_object then [errorOut] end
-    for i = 0,root.u.object.length do
-      var node_name = root.u.object.values[i].name
-      var node_value = root.u.object.values[i].value
-      var parsed = false
-      escape for def_name,def_type in pairs(CONFIG_VALUES) do emit quote
-          if C.strcmp(def_name, node_name) == 0 then
-            [emitValueParser(`config.[def_name], node_value, def_type)]
-            parsed = true
-          end
-      end end end
-      if parsed then totalParsed = totalParsed + 1 else [errorOut] end
-    end
-    -- TODO: Assuming the json file contains no duplicate values
-    if totalParsed < [UTIL.tableSize(CONFIG_VALUES)] then [errorOut] end
+    var settings = JSON.json_settings{ 0, 0, nil, nil, nil, 0 }
+    settings.settings = JSON.json_enable_comments
+    var root = JSON.json_parse_ex(&settings, buf, len, nil)
+    if root == nil then [errorOut] end
+    [emitValueParser(config, root, CONFIG_MAP)]
     JSON.json_value_free(root)
     C.free(buf)
     return config
@@ -2229,13 +2250,19 @@ local emitConfigParser = terralib.memoize(function()
   return parseConfig
 end)
 
--- string, terralib.type | Enum -> M.AST.Expr
+-- string, Enum | int | double | double[N] -> M.AST.Expr
 function A.readConfig(name, type)
-  assert(getmetatable(type) == Enum or terralib.types.istype(type))
-  if CONFIG_VALUES[name] then
-    assert(CONFIG_VALUES[name] == type)
-  else
-    CONFIG_VALUES[name] = type
+  assert(getmetatable(type) == Enum or type == int or type == double or
+         equalsDoubleVec(type))
+  local map = CONFIG_MAP
+  local fields = name:split('.')
+  for i,fld in ipairs(fields) do
+    if i == #fields then
+      if map[fld] then assert(map[fld] == type) else map[fld] = type end
+    else
+      if not map[fld] then map[fld] = {} end
+      map = map[fld]
+    end
   end
   return M.AST.ReadConfig(name)
 end
@@ -2458,7 +2485,12 @@ function M.AST.UnaryOp:toRExpr()
     assert(false)
 end
 function M.AST.ReadConfig:toRExpr()
-  return rexpr CONFIG_SYMBOL.[self.name] end
+  local expr = rexpr CONFIG_SYMBOL end
+  local fields = name:split('.')
+  for _,fld in ipairs(fields) do
+    expr = rexpr expr.[fld] end
+  end
+  return expr
 end
 
 -- M.AST.FillField -> RG.rquote*

@@ -386,3 +386,15 @@ function TerraList:pop()
   self[#self] = nil
   return res
 end
+
+------------------------------------------------------------------------------
+--[[ Strings                                                              ]]--
+------------------------------------------------------------------------------
+
+-- string -> string*
+function string:split(sep)
+  local fields = terralib.newlist()
+  local pattern = string.format("([^%s]+)", sep)
+  self:gsub(pattern, function(c) fields:insert(c) end)
+  return fields
+end
