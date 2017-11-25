@@ -75,6 +75,7 @@ local ADT AST
        | Dump { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Load { rel : Relation, flds : string*, file : string, vals : Expr* }
        | Inline { quot : RQuote }
+       | Error { msg : string }
   Cond = Literal { val : boolean }
        | And { lhs : Cond, rhs : Cond }
        | Or { lhs : Cond, rhs : Cond }
@@ -84,6 +85,8 @@ local ADT AST
        | GetGlobal { global : Global }
        | BinaryOp { op : string, lhs : Expr, rhs : Expr }
        | UnaryOp { op : string, arg : Expr }
+       | Array { elems : Expr }
+       | Index { base : Expr, index : int }
        | ReadConfig { name : string }
   extern ExprConst isExprConst
   extern Field     isField
@@ -137,6 +140,14 @@ function AST.Expr.__unm(x)
   return AST.UnaryOp('-', x)
 end
 
+-- int -> AST.Expr
+function AST.Expr:__index(key)
+  if type(key) == 'number' and key == math.floor(key) then
+    return AST.Index(self, key)
+  end
+  error('Non-integer indexing on main-program expression')
+end
+
 -- ExprConst | AST.Expr, ExprConst | AST.Expr -> AST.Expr
 function M.MAX(lhs, rhs)
   if isExprConst(lhs) then lhs = AST.Const(lhs) end
@@ -185,6 +196,13 @@ function M.GT(lhs, rhs) return implCompare('>',  lhs, rhs) end
 function M.LT(lhs, rhs) return implCompare('<',  lhs, rhs) end
 function M.GE(lhs, rhs) return implCompare('>=', lhs, rhs) end
 function M.LE(lhs, rhs) return implCompare('<=', lhs, rhs) end
+
+-- (ExprConst | AST.Expr)* -> AST.Expr
+function M.ARRAY(elems)
+  return AST.Array(terralib.newlist(elems):map(function(e)
+    return isExprConst(e) and AST.Const(e) or e
+  end))
+end
 
 -------------------------------------------------------------------------------
 -- Control flow
@@ -256,4 +274,9 @@ end
 -- RG.rquote -> ()
 function M.INLINE(quot)
   M.stmts():insert(AST.Inline(quot))
+end
+
+-- string -> ()
+function M.ERROR(msg)
+  M.stmts():insert(AST.Error(msg))
 end
