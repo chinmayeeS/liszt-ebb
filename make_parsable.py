@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 
-# NOTE: Run Admiral in code-emission mode, set '-fdebug 1', and feed the stdout
-# (not stderr) output into this script. Make sure you compile the resulting
-# Regent code with the same value for -fparallelize-dop as the original Liszt.
+# NOTE: Run Admiral with DEBUG=1, set '-fdebug 1', and feed the stdout
+# (not stderr) output into this script.
 
 import fileinput
 import re
@@ -10,6 +9,7 @@ import re
 # Add required imports
 print 'import "regent"'
 print 'local HDF5 = terralib.includec("hdf5/serial/hdf5.h")'
+print 'local JSON = terralib.includec("json.h")'
 print 'local C = terralib.includecstring[['
 print '#include <math.h>'
 print '#include <stdlib.h>'
@@ -43,8 +43,10 @@ for line in fileinput.input():
     line = line.replace('std.', 'regentlib.')
     # Remove unparsable terra annotations
     line = re.sub(r'extern global (.*) : \w+', r'\1', line)
+    # (@x). -> x.
+    line = re.sub(r'\(@(\w+)\)\.', r'\1.', line)
     # Print filtered line
     print line
 
 # Add final compile command
-print 'regentlib.saveobj(main, "a.out", "executable", nil, {"-lm","-lhdf5_serial"})'
+print 'regentlib.saveobj(main, "a.out", "executable", nil, {"-ljsonparser","-lm","-lhdf5_serial"})'

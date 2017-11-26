@@ -27,6 +27,7 @@ local Grid = {}
 package.loaded["ebb.domains.grid"] = Grid
 
 local L    = require 'ebblib'
+local M    = require "ebb.src.main"
 local R    = require 'ebb.src.relations'
 local UTIL = require 'ebb.src.util'
 
@@ -34,9 +35,6 @@ local copy_table = UTIL.copy_table
 
 -------------------------------------------------------------------------------
 
-local int_floor = L.Macro(function(v)
-  return ebb `L.int(L.floor(v))
-end)
 local max_impl = L.Macro(function(a,b)
   return ebb `L.imax(a, b)
 end)
@@ -57,25 +55,12 @@ end)
 
 -------------------------------------------------------------------------------
 
-local function rectangles_3d(X, Y, Z, xb, yb, zb)
-  return {
-    boundary_xneg = { {0,xb-1},    {0,Y-1},     {0,Z-1}     },
-    boundary_xpos = { {X-xb,X-1},  {0,Y-1},     {0,Z-1}     },
-    boundary_yneg = { {xb,X-xb-1}, {0,yb-1},    {0,Z-1}     },
-    boundary_ypos = { {xb,X-xb-1}, {Y-yb,Y-1},  {0,Z-1}     },
-    boundary_zneg = { {xb,X-xb-1}, {yb,Y-yb-1}, {0,zb-1}    },
-    boundary_zpos = { {xb,X-xb-1}, {yb,Y-yb-1}, {Z-zb,Z-1}  },
-    interior      = { {xb,X-xb-1}, {yb,Y-yb-1}, {zb,Z-zb-1} },
-  }
-end
-
 local function addHelpers(cells)
-  local Cx, Cy, Cz  = cells._dims[1], cells._dims[2], cells._dims[3]
-  local xw, yw, zw  = cells._width[1], cells._width[2], cells._width[3]
-  local xo, yo, zo  = cells._origin[1], cells._origin[2], cells._origin[3]
-  local xn_bd       = cells._boundary_depth[1]
-  local yn_bd       = cells._boundary_depth[2]
-  local zn_bd       = cells._boundary_depth[3]
+  local xNum, yNum, zNum  = cells:xNum(), cells:yNum(), cells:zNum()
+  local xWidth, yWidth, zWidth  = cells:xWidth(), cells:yWidth(), cells:zWidth()
+  local xOrigin, yOrigin, zOrigin  = cells:xOrigin(), cells:yOrigin(), cells:zOrigin()
+  local xBnum, yBnum, zBnum = cells:xBnum(), cells:yBnum(), cells:zBnum()
+  local xPeriodic, yPeriodic, zPeriodic = cells:xPeriodic(), cells:yPeriodic(), cells:zPeriodic()
 
   -- relative offset
   cells:NewFieldMacro('__apply_macro', L.Macro(function(c,x,y,z)
@@ -84,37 +69,59 @@ local function addHelpers(cells)
                                    {0,0,1,z}}, c)
   end))
 
-  -- Boundary/Interior subsets
-  cells:NewDivision(rectangles_3d(Cx, Cy, Cz, xn_bd, yn_bd, zn_bd))
-
   cells:NewFieldReadFunction('center', ebb(c)
-    return L.vec3d({ xo + xw / Cx * (L.double(L.xid(c)) + 0.5),
-                     yo + yw / Cy * (L.double(L.yid(c)) + 0.5),
-                     zo + zw / Cz * (L.double(L.zid(c)) + 0.5) })
+    return L.vec3d({ xOrigin + (xWidth/xNum) * (L.double(L.xid(c)-xBnum)+0.5),
+                     yOrigin + (yWidth/yNum) * (L.double(L.yid(c)-yBnum)+0.5),
+                     zOrigin + (zWidth/zNum) * (L.double(L.zid(c)-zBnum)+0.5) })
   end)
 
-  local xsnap = cells._periodic[1] and wrap_idx or clamp_idx
-  local ysnap = cells._periodic[2] and wrap_idx or clamp_idx
-  local zsnap = cells._periodic[3] and wrap_idx or clamp_idx
-  rawset(cells, 'locate', L.Macro(function(pos)
-    return ebb `L.UNSAFE_ROW({xsnap((pos[0] - xo) / xw * Cx, Cx),
-                              ysnap((pos[1] - yo) / yw * Cy, Cy),
-                              zsnap((pos[2] - zo) / zw * Cz, Cz)}, cells)
-  end))
+  rawset(cells, 'locate', ebb(pos)
+    var xcw = xWidth / xNum
+    var xro = xOrigin - xBnum * xcw
+    var xpos = (pos[0] - xro) / xcw
+    var xrnum = xNum + 2*xBnum
+    var xidx : L.uint64
+    if xPeriodic then
+      xidx = wrap_idx(xpos, xrnum)
+    else
+      xidx = clamp_idx(xpos, xrnum)
+    end
+    var ycw = yWidth / yNum
+    var yro = yOrigin - yBnum * ycw
+    var ypos = (pos[1] - yro) / ycw
+    var yrnum = yNum + 2*yBnum
+    var yidx : L.uint64
+    if yPeriodic then
+      yidx = wrap_idx(ypos, yrnum)
+    else
+      yidx = clamp_idx(ypos, yrnum)
+    end
+    var zcw = zWidth / zNum
+    var zro = zOrigin - zBnum * zcw
+    var zpos = (pos[2] - zro) / zcw
+    var zrnum = zNum + 2*zBnum
+    var zidx : L.uint64
+    if zPeriodic then
+      zidx = wrap_idx(zpos, zrnum)
+    else
+      zidx = clamp_idx(zpos, zrnum)
+    end
+    return L.UNSAFE_ROW({xidx, yidx, zidx}, cells)
+  end)
 
   -- boundary depths
   cells:NewFieldMacro('xneg_depth', L.Macro(function(c)
-    return ebb `max_impl(L.int(xn_bd - L.xid(c)), 0)            end))
+    return ebb `max_impl(L.int(xBnum - L.xid(c)), 0)              end))
   cells:NewFieldMacro('xpos_depth', L.Macro(function(c)
-    return ebb `max_impl(L.int(L.xid(c) - (Cx-1 - xn_bd)), 0)   end))
+    return ebb `max_impl(L.int(L.xid(c) - (xNum + xBnum - 1)), 0) end))
   cells:NewFieldMacro('yneg_depth', L.Macro(function(c)
-    return ebb `max_impl(L.int(yn_bd - L.yid(c)), 0)            end))
+    return ebb `max_impl(L.int(yBnum - L.yid(c)), 0)              end))
   cells:NewFieldMacro('ypos_depth', L.Macro(function(c)
-    return ebb `max_impl(L.int(L.yid(c) - (Cy-1 - yn_bd)), 0)   end))
+    return ebb `max_impl(L.int(L.yid(c) - (yNum + yBnum - 1)), 0) end))
   cells:NewFieldMacro('zneg_depth', L.Macro(function(c)
-    return ebb `max_impl(L.int(zn_bd - L.zid(c)), 0)            end))
+    return ebb `max_impl(L.int(zBnum - L.zid(c)), 0)              end))
   cells:NewFieldMacro('zpos_depth', L.Macro(function(c)
-    return ebb `max_impl(L.int(L.zid(c) - (Cz-1 - zn_bd)), 0)   end))
+    return ebb `max_impl(L.int(L.zid(c) - (zNum + zBnum - 1)), 0) end))
 
   cells:NewFieldReadFunction('in_boundary', ebb(c)
     return c.xneg_depth > 0 or c.xpos_depth > 0 or
@@ -122,7 +129,7 @@ local function addHelpers(cells)
            c.zneg_depth > 0 or c.zpos_depth > 0
   end)
   cells:NewFieldMacro('in_interior', L.Macro(function(c)
-    return ebb ` not c.in_boundary
+    return ebb `not c.in_boundary
   end))
 end
 
@@ -136,94 +143,31 @@ end
 
 -------------------------------------------------------------------------------
 
--- string, int[3], int[3] -> R.Relation
-function R.Relation:Coarsen(coarseName, factor, coarseBoundaryDepth)
-  assert(self:isGrid())
+-- R.Relation, string -> ()
+function R.Relation:LinkWithCoarse(coarse, fldName)
+  assert(self:isGrid() and coarse:isGrid())
   local fine = self
 
-  -- Check inputs
-  local cbd = coarseBoundaryDepth
-  local function isInt(n) return type(n) == 'number' and n == math.floor(n) end
-  local function isPosInt(n) return isInt(n) and n > 0 end
-  local function isNonNegInt(n) return isInt(n) and n >= 0 end
-  local check =
-    type(coarseName) == 'string'
-    and terralib.israwlist(factor) and #factor == 3
-    and isPosInt(factor[1]) and isPosInt(factor[2]) and isPosInt(factor[3])
-    and terralib.israwlist(cbd) and #cbd == 3
-    and isNonNegInt(cbd[1]) and isNonNegInt(cbd[2]) and isNonNegInt(cbd[3])
-  if not check then
-    error("Bad arguments to 'coarsen'")
-  end
+  M.IF(M.OR(M.NOT(M.EQ(fine.xNum:get() % coarse.xNum:get(), 0)),
+       M.OR(M.NOT(M.EQ(fine.yNum:get() % coarse.yNum:get(), 0)),
+            M.NOT(M.EQ(fine.zNum:get() % coarse.zNum:get(), 0)))))
+    M.ERROR("Inexact coarsening factor")
+  M.END()
 
-  -- Fine grid values (including boundary)
-  local fDims   = fine:Dims()
-  local fOrigin = fine:Origin()
-  local fWidth  = fine:Width()
-  local fbd     = fine:BoundaryDepth()
-  local fcw     = { fWidth[1] / fDims[1], -- cell width
-                    fWidth[2] / fDims[2],
-                    fWidth[3] / fDims[3] }
-
-  -- Inner grid values
-  local fInnerDims  = { fDims[1] - 2 * fbd[1],
-                        fDims[2] - 2 * fbd[2],
-                        fDims[3] - 2 * fbd[3] }
-  local innerOrigin = { fOrigin[1] + fbd[1] * fcw[1],
-                        fOrigin[2] + fbd[2] * fcw[2],
-                        fOrigin[3] + fbd[3] * fcw[3] }
-  local innerWidth  = { fWidth[1] - 2 * fbd[1] * fcw[1],
-                        fWidth[2] - 2 * fbd[2] * fcw[2],
-                        fWidth[3] - 2 * fbd[3] * fcw[3] }
-  local cInnerDims  = { fInnerDims[1] / factor[1],
-                        fInnerDims[2] / factor[2],
-                        fInnerDims[3] / factor[3] }
-  if fInnerDims[1] % factor[1] ~= 0 or
-     fInnerDims[2] % factor[2] ~= 0 or
-     fInnerDims[3] % factor[3] ~= 0 then
-    error("Inexact coarsening factor")
-  end
-
-  -- Coarse grid values (including boundary)
-  local cDims   = { cInnerDims[1] + 2 * cbd[1],
-                    cInnerDims[2] + 2 * cbd[2],
-                    cInnerDims[3] + 2 * cbd[3] }
-  local ccw     = { fcw[1] * factor[1],
-                    fcw[2] * factor[2],
-                    fcw[3] * factor[3] }
-  local cOrigin = { innerOrigin[1] - cbd[1] * ccw[1],
-                    innerOrigin[2] - cbd[2] * ccw[2],
-                    innerOrigin[3] - cbd[3] * ccw[3] }
-  local cWidth  = { innerWidth[1] + 2 * cbd[1] * ccw[1],
-                    innerWidth[2] + 2 * cbd[2] * ccw[2],
-                    innerWidth[3] + 2 * cbd[3] * ccw[3] }
-
-  -- Build coarse grid
-  local coarse = R.NewRelation {
-    name            = coarseName,
-    mode            = 'GRID',
-    dims            = cDims,
-    origin          = cOrigin,
-    width           = cWidth,
-    boundary_depth  = cbd,
-    periodic        = fine:Periodic(),
-  }
-
-  -- Connect the grids
-  local fbd1, fbd2, fbd3 = fbd[1], fbd[2], fbd[3]
-  local factor1, factor2, factor3 = factor[1], factor[2], factor[3]
-  local cbd1, cbd2, cbd3 = cbd[1], cbd[2], cbd[3]
-  local fldName = 'to_'..coarseName
-  fine._coarsening_fields:insert(fine:NewField(fldName, coarse))
+  fine:CoarseningFields():insert(fine:NewField(fldName, coarse))
   local ebb SetCoarseningField(f : fine)
+    var xFactor = fine.xNum / coarse.xNum
+    var yFactor = fine.yNum / coarse.yNum
+    var zFactor = fine.zNum / coarse.zNum
     if f.in_interior then
-      f.[fldName] = L.UNSAFE_ROW({(L.xid(f) - fbd1) / factor1 + cbd1,
-                                  (L.yid(f) - fbd2) / factor2 + cbd2,
-                                  (L.zid(f) - fbd3) / factor3 + cbd3},
-                                 coarse)
+      f.[fldName] =
+        L.UNSAFE_ROW({(L.xid(f) - fine.xBnum) / xFactor + coarse.xBnum,
+                      (L.yid(f) - fine.yBnum) / yFactor + coarse.yBnum,
+                      (L.zid(f) - fine.zBnum) / zFactor + coarse.zBnum},
+                     coarse)
+    else
+      f.[fldName] = L.UNSAFE_ROW({-1,-1,-1}, coarse)
     end
   end
   fine:foreach(SetCoarseningField)
-
-  return coarse
 end

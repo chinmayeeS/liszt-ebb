@@ -49,14 +49,9 @@ local newlist = terralib.newlist
 -- Parse config options
 -------------------------------------------------------------------------------
 
--- string -> bool
-local function exists(filename)
-  return os.rename(filename, filename) and true or false
-end
-
 local DEBUG = os.getenv('DEBUG') == '1'
 
-local LIBS = newlist({'-lm'})
+local LIBS = newlist({'-ljsonparser', '-lm'})
 
 local OBJNAME = os.getenv('OBJNAME') or 'a.out'
 
@@ -66,43 +61,8 @@ local HDF_HEADER = os.getenv('HDF_HEADER') or 'hdf5.h'
 
 local USE_HDF = not (os.getenv('USE_HDF') == '0')
 if USE_HDF then
-  terralib.linklibrary('lib'..HDF_LIBNAME..'.so')
   LIBS:insert('-l'..HDF_LIBNAME)
 end
-
--- () -> int,int,int
-function A.primPartDims()
-  local dop = RG.config['parallelize-dop']
-  local NX,NY,NZ = dop:match('^(%d+),(%d+),(%d+)$')
-  if NX then
-    return tonumber(NX),tonumber(NY),tonumber(NZ)
-  end
-  local num = assert(tonumber(dop))
-  local factors = newlist()
-  while num > 1 do
-    for p = 2, num do
-      if num % p == 0 then
-        factors:insert(p)
-        num = num / p
-        break
-      end
-    end
-  end
-  NX,NY,NZ = 1,1,1
-  for i = 1, #factors do
-    if i % 3 == 1 then NX = NX * factors[i] end
-    if i % 3 == 2 then NY = NY * factors[i] end
-    if i % 3 == 0 then NZ = NZ * factors[i] end
-  end
-  return NX,NY,NZ
-end
-local NX,NY,NZ = A.primPartDims()
-local NUM_PRIM_PARTS = NX * NY * NZ
-
--- () -> RG.symbol
-A.primColors = terralib.memoize(function()
-  return RG.newsymbol(nil, 'primColors')
-end)
 
 -------------------------------------------------------------------------------
 -- Helper functions
@@ -457,6 +417,21 @@ local function emitReduce(op, typ, lval, exp)
 end
 
 -------------------------------------------------------------------------------
+-- Global symbols
+-------------------------------------------------------------------------------
+
+local NX = RG.newsymbol(int, 'NX')
+local NY = RG.newsymbol(int, 'NY')
+local NZ = RG.newsymbol(int, 'NZ')
+
+local NUM_PRIM_PARTS = rexpr NX * NY * NZ end
+
+-- () -> RG.symbol
+A.primColors = terralib.memoize(function()
+  return RG.newsymbol(nil, 'primColors')
+end)
+
+-------------------------------------------------------------------------------
 -- Relation-to-region translation
 -------------------------------------------------------------------------------
 
@@ -581,20 +556,28 @@ function R.Relation:translateIndex(lit)
   else assert(false) end
 end
 
--- () -> int
+-- () -> RG.rexpr
 function R.Relation:primPartSize()
   assert(self:isCoupled())
-  return math.ceil(math.ceil(self:Size() / NUM_PRIM_PARTS) * self:MaxSkew())
+  return rexpr C.ceil([self:Size():varSymbol()] / NUM_PRIM_PARTS
+                      * [self:MaxSkew():varSymbol()]) end
 end
 
 -- () -> RG.rexpr
 function R.Relation:emitISpaceInit()
   if self:isPlain() then
-    return rexpr ispace(int1d, [self:Size()]) end
+    return rexpr ispace(int1d, [self:Size():varSymbol()]) end
   elseif self:isGrid() then
-    local dims = self:Dims()
+    local xNum = self:xNum():varSymbol()
+    local yNum = self:yNum():varSymbol()
+    local zNum = self:zNum():varSymbol()
+    local xBnum = self:xBnum():varSymbol()
+    local yBnum = self:yBnum():varSymbol()
+    local zBnum = self:zBnum():varSymbol()
     return rexpr
-      ispace(int3d, { x = [dims[1]], y = [dims[2]], z = [dims[3]] })
+      ispace(int3d, { x = xNum + 2 * xBnum,
+                      y = yNum + 2 * yBnum,
+                      z = zNum + 2 * zBnum })
     end
   elseif self:isCoupled() then
     return rexpr ispace(int1d, [self:primPartSize()] * NUM_PRIM_PARTS) end
@@ -635,39 +618,40 @@ function R.Relation:emitPrimPartInit()
   local s = self:copyRegionSymbol()
   local p_s = self:copyPrimPartSymbol()
   if self:isPlain() then
-    assert(self:Size() % NUM_PRIM_PARTS == 0)
     return rquote
+      RG.assert([self:Size():varSymbol()] % NUM_PRIM_PARTS == 0,
+                'Uneven partitioning')
       var [p_r] = partition(equal, r, [A.primColors()])
       var [p_s] = partition(equal, s, [A.primColors()])
     end
   elseif self:isGrid() then
-    -- Check for exact partitioning of grid interior
-    local bd = self:BoundaryDepth()
-    local dims = self:Dims()
-    assert((dims[1] - 2 * bd[1]) % NX == 0)
-    assert((dims[2] - 2 * bd[2]) % NY == 0)
-    assert((dims[3] - 2 * bd[3]) % NZ == 0)
-    local tileSizeX = (dims[1] - 2 * bd[1]) / NX
-    local tileSizeY = (dims[2] - 2 * bd[2]) / NY
-    local tileSizeZ = (dims[3] - 2 * bd[3]) / NZ
-    -- Partition interior equally, then add boundaries
+    local xNum = self:xNum():varSymbol()
+    local yNum = self:yNum():varSymbol()
+    local zNum = self:zNum():varSymbol()
+    local xBnum = self:xBnum():varSymbol()
+    local yBnum = self:yBnum():varSymbol()
+    local zBnum = self:zBnum():varSymbol()
     return rquote
+      RG.assert(xNum % NX == 0, 'Uneven partitioning')
+      RG.assert(yNum % NY == 0, 'Uneven partitioning')
+      RG.assert(zNum % NZ == 0, 'Uneven partitioning')
       var coloring = RG.c.legion_domain_point_coloring_create()
+      -- Partition interior equally, then add boundaries
       for c in [A.primColors()] do
         var rect = rect3d{
-          lo = int3d{ x = [bd[1]] + tileSizeX * c.x,
-                      y = [bd[2]] + tileSizeY * c.y,
-                      z = [bd[3]] + tileSizeZ * c.z },
-          hi = int3d{ x = [bd[1]] + tileSizeX * (c.x+1) - 1,
-                      y = [bd[2]] + tileSizeY * (c.y+1) - 1,
-                      z = [bd[3]] + tileSizeZ * (c.z+1) - 1 }
+          lo = int3d{ x = xBnum + (xNum / NX) * c.x,
+                      y = yBnum + (yNum / NY) * c.y,
+                      z = zBnum + (zNum / NZ) * c.z },
+          hi = int3d{ x = xBnum + (xNum / NX) * (c.x+1) - 1,
+                      y = yBnum + (yNum / NY) * (c.y+1) - 1,
+                      z = zBnum + (zNum / NZ) * (c.z+1) - 1 }
         }
-        if c.x == 0    then rect.lo.x -= [bd[1]] end
-        if c.x == NX-1 then rect.hi.x += [bd[1]] end
-        if c.y == 0    then rect.lo.y -= [bd[2]] end
-        if c.y == NY-1 then rect.hi.y += [bd[2]] end
-        if c.z == 0    then rect.lo.z -= [bd[3]] end
-        if c.z == NZ-1 then rect.hi.z += [bd[3]] end
+        if c.x == 0    then rect.lo.x -= xBnum end
+        if c.x == NX-1 then rect.hi.x += xBnum end
+        if c.y == 0    then rect.lo.y -= yBnum end
+        if c.y == NY-1 then rect.hi.y += yBnum end
+        if c.z == 0    then rect.lo.z -= zBnum end
+        if c.z == NZ-1 then rect.hi.z += zBnum end
         RG.c.legion_domain_point_coloring_color_domain(coloring, c, rect)
       end
       var [p_r] = partition(disjoint, r, coloring, [A.primColors()])
@@ -677,6 +661,8 @@ function R.Relation:emitPrimPartInit()
   elseif self:isCoupled() then
     local primPartSize = self:primPartSize()
     return rquote
+      RG.assert([self:Size():varSymbol()] % NUM_PRIM_PARTS == 0,
+                'Uneven partitioning')
       var coloring = RG.c.legion_domain_point_coloring_create()
       for z = 0, NZ do
         for y = 0, NY do
@@ -701,20 +687,21 @@ end
 
 -- () -> RG.task
 R.Relation.emitElemColor = terralib.memoize(function(self)
+  local NX_ = RG.newsymbol(int, 'NX_')
+  local NY_ = RG.newsymbol(int, 'NY_')
+  local NZ_ = RG.newsymbol(int, 'NZ_')
   local elemColor
   if self:isGrid() then
-    local bd = self:BoundaryDepth()
-    local dims = self:Dims()
-    local tileSizeX = (dims[1] - 2 * bd[1]) / NX
-    local tileSizeY = (dims[2] - 2 * bd[2]) / NY
-    local tileSizeZ = (dims[3] - 2 * bd[3]) / NZ
-    __demand(__inline) task elemColor(idx : int3d)
-      idx.x = min( max( idx.x, [bd[1]] ), [dims[1]] + [bd[1]] - 1 )
-      idx.y = min( max( idx.y, [bd[2]] ), [dims[2]] + [bd[2]] - 1 )
-      idx.z = min( max( idx.z, [bd[3]] ), [dims[3]] + [bd[3]] - 1 )
-      return int3d{ (idx.x - [bd[1]]) / tileSizeX,
-                    (idx.y - [bd[2]]) / tileSizeY,
-                    (idx.z - [bd[3]]) / tileSizeZ }
+    __demand(__inline) task elemColor(idx : int3d,
+                                      xNum : int, yNum : int, zNum : int,
+                                      xBnum : int, yBnum : int, zBnum : int,
+                                      [NX_], [NY_], [NZ_])
+      idx.x = min( max( idx.x, xBnum ), xNum + xBnum - 1 )
+      idx.y = min( max( idx.y, yBnum ), yNum + yBnum - 1 )
+      idx.z = min( max( idx.z, zBnum ), zNum + zBnum - 1 )
+      return int3d{ (idx.x - xBnum) / (xNum / NX_),
+                    (idx.y - yBnum) / (yNum / NY_),
+                    (idx.z - zBnum) / (zNum / NZ_) }
     end
   else
     -- TODO: Not covered: plain and coupled relations. These follow a
@@ -730,10 +717,10 @@ end)
 function R.Relation:emitQueueInit(i)
   assert(self:isCoupled())
   local q = self:queues()[i]
-  local size = self:MaxXferNum() * NUM_PRIM_PARTS
   local fspaceExpr = self:queueFieldSpace()
+  local maxXferNum = self:MaxXferNum():varSymbol()
   return rquote
-    var [q] = region(ispace(int1d, size), fspaceExpr)
+    var [q] = region(ispace(int1d, maxXferNum * NUM_PRIM_PARTS), fspaceExpr)
   end
 end
 
@@ -745,6 +732,7 @@ function R.Relation:emitQueuePartInit(i)
   local qDstPart = self:qDstParts()[i]
   local colors = A.primColors()
   local stencil = self:XferStencil()[i]
+  local maxXferNum = self:MaxXferNum():varSymbol()
   return rquote
     var srcColoring = RG.c.legion_domain_point_coloring_create()
     for z = 0, NZ do
@@ -752,12 +740,12 @@ function R.Relation:emitQueuePartInit(i)
         for x = 0, NX do
           var qBase : int64
           for qStart in q do
-            qBase = qStart + (z*NX*NY + y*NX + x) * [self:MaxXferNum()]
+            qBase = qStart + (z*NX*NY + y*NX + x) * maxXferNum
             break
           end
           RG.c.legion_domain_point_coloring_color_domain(
             srcColoring, int3d{x,y,z},
-            [rect1d]{ qBase, qBase + [self:MaxXferNum()] - 1 })
+            [rect1d]{ qBase, qBase + maxXferNum - 1 })
         end
       end
     end
@@ -772,8 +760,7 @@ function R.Relation:emitQueuePartInit(i)
         break
       end
       RG.c.legion_domain_point_coloring_color_domain(
-        dstColoring, c,
-        [rect1d]{ srcBase, srcBase + [self:MaxXferNum()] - 1 })
+        dstColoring, c, [rect1d]{ srcBase, srcBase + maxXferNum - 1 })
     end
     var [qDstPart] = partition(aliased, q, dstColoring, colors)
     RG.c.legion_domain_point_coloring_destroy(dstColoring)
@@ -784,6 +771,9 @@ end
 R.Relation.emitPushAll = terralib.memoize(function(self)
   assert(self:isCoupled())
   local couplingFld = self:CouplingField()
+  local NX_ = RG.newsymbol(int, 'NX_')
+  local NY_ = RG.newsymbol(int, 'NY_')
+  local NZ_ = RG.newsymbol(int, 'NZ_')
   -- utilized sub-tasks
   local rngElemColor = couplingFld:Type().relation:emitElemColor()
   -- code elements to fill in
@@ -836,7 +826,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
       do
         var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
         if rPtr.__valid and
-           elemColor == (partColor + colorOff + {NX,NY,NZ}) % {NX,NY,NZ} then
+           elemColor == (partColor + colorOff + {NX_,NY_,NZ_}) % {NX_,NY_,NZ_} then
           var idx = 0
           for qPtr in [q] do
             if not [bool]([q][qPtr][ [self:validFieldOffset()] ]) then
@@ -854,12 +844,19 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
     end)
   end
   -- synthesize task
-  local task pushAll([partColor], [r], [qs])
+  local task pushAll([partColor], [r], [qs],
+                     rngXNum : int, rngYNum : int, rngZNum : int,
+                     rngXbnum : int, rngYbnum : int, rngZbnum : int,
+                     [NX_], [NY_], [NZ_])
   where reads(r), writes(r.__valid), [privileges] do
     [queueInits]
     for [rPtr] in r do
       if rPtr.__valid then
-        var [elemColor] = rngElemColor(rPtr.[couplingFld:Name()])
+        var [elemColor] =
+          rngElemColor(rPtr.[couplingFld:Name()],
+                       rngXNum, rngYNum, rngZNum,
+                       rngXbnum, rngYbnum, rngZbnum,
+                       NX_, NY_, NZ_)
         if elemColor ~= partColor then
           [moveChecks]
           RG.assert(not rPtr.__valid, 'Element moved past predicted stencil')
@@ -917,12 +914,22 @@ function R.Relation:emitPrimPartUpdate()
   assert(self:isCoupled())
   local pushAll = self:emitPushAll()
   local pullAll = self:emitPullAll()
+  local rngRel = self:CouplingField():Type().relation
+  local rngXNum = rngRel:xNum():varSymbol()
+  local rngYNum = rngRel:yNum():varSymbol()
+  local rngZNum = rngRel:zNum():varSymbol()
+  local rngXbnum = rngRel:xBnum():varSymbol()
+  local rngYbnum = rngRel:yBnum():varSymbol()
+  local rngZbnum = rngRel:zBnum():varSymbol()
   return rquote
     for c in [A.primColors()] do
       pushAll(c, [self:primPartSymbol()][c],
               [self:qSrcParts():map(function(qSrcPart)
                 return rexpr qSrcPart[c] end
-              end)])
+              end)],
+              rngXNum, rngYNum, rngZNum,
+              rngXbnum, rngYbnum, rngZbnum,
+              NX, NY, NZ)
     end
     for c in [A.primColors()] do
       pullAll(c, [self:primPartSymbol()][c],
@@ -1085,10 +1092,21 @@ function FunContext.New(info, argNames, argTypes)
   return self
 end
 
--- AST.Symbol -> RG.symbol
-function FunContext:addLocal(lsym)
+-- PRE.Global -> RG.symbol
+function FunContext:addGlobal(global)
+  local sym = self.globalMap[global]
+  if not sym then
+    self.readGlobals:insert(global)
+    sym = RG.newsymbol(toRType(global:Type()), idSanitize(global:Name()))
+    self.globalMap[global] = sym
+  end
+  return sym
+end
+
+-- AST.Symbol, T.Type -> RG.symbol
+function FunContext:addLocal(lsym, type)
   assert(not self.localMap[lsym])
-  local rsym = RG.newsymbol(nil, tostring(lsym))
+  local rsym = RG.newsymbol(toRType(type), tostring(lsym))
   self.localMap[lsym] = rsym
   return rsym
 end
@@ -1141,6 +1159,9 @@ function AST.Call:hasNoStencil()
      self.func == L.fmin or self.func == L.imin or
      self.func == L.dot or self.func == L.times then
     return all(self.params, function(e) return e:hasNoStencil() end)
+  end
+  if self.func == L.UNSAFE_ROW then
+    return self.params[1]:hasNoStencil()
   end
   return false
 end
@@ -1213,7 +1234,7 @@ function AST.Break:hasNoStencil()
   quit(self)
 end
 function AST.DeclStatement:hasNoStencil()
-  return self.initializer:hasNoStencil()
+  return not self.initializer or self.initializer:hasNoStencil()
 end
 function AST.DeleteStatement:hasNoStencil()
   return self.key:hasNoStencil()
@@ -1472,7 +1493,6 @@ function AST.Call:toRExpr(ctxt)
   if self.func == L.Affine then
     local rel = self.params[1].node_type.value
     assert(rel:isGrid())
-    local dims = rel:Dims()
     -- TODO: The translated expression for self.params[3] is duplicated.
     assert(self.params[2].m == self.params[2].n + 1)
     assert(self.params[2].n == 3)
@@ -1489,11 +1509,7 @@ function AST.Call:toRExpr(ctxt)
     if x == 0 and y == 0 and z == 0 then
       return base
     end
-    return rexpr (base + {x,y,z}) %
-      rect3d{
-        lo = int3d{ x = 0,           y = 0,           z = 0           },
-        hi = int3d{ x = [dims[1]-1], y = [dims[2]-1], z = [dims[3]-1] } }
-    end
+    return rexpr (base + {x,y,z}) % [ctxt.relMap[rel]].bounds end
   end
   -- Assertion
   -- self.params[1] : AST.Expression
@@ -1783,10 +1799,11 @@ function AST.DeclStatement:toRQuote(ctxt)
   -- self.name        : AST.Symbol
   -- self.node_type   : T.Type
   -- self.initializer : AST.Expression
-  local rsym = ctxt:addLocal(self.name)
-  return rquote
-    var [rsym] = [self.initializer:toRExpr(ctxt)]
+  local rsym = ctxt:addLocal(self.name, self.node_type)
+  if self.initializer then
+    return rquote var [rsym] = [self.initializer:toRExpr(ctxt)] end
   end
+  return rquote var [rsym] end
 end
 function AST.DeleteStatement:toRQuote(ctxt)
   -- self.key : AST.Expression
@@ -1881,7 +1898,7 @@ function AST.NumericFor:toRQuote(ctxt)
   -- self.lower : AST.Expression
   -- self.upper : AST.Expression
   -- self.body  : AST.Block
-  local i = ctxt:addLocal(self.name)
+  local i = ctxt:addLocal(self.name, L.int)
   return rquote
     for [i] = [self.lower:toRExpr(ctxt)], [self.upper:toRExpr(ctxt)] do
       [self.body:toRQuote(ctxt)]
@@ -1923,15 +1940,15 @@ if USE_HDF then
       assert(flds:find(self:CouplingField():Name()))
       flds:insert('__valid')
     end
-    local terra create(filename : rawstring)
-      var fid = HDF5.H5Fcreate(filename, HDF5.H5F_ACC_TRUNC,
+    local terra create(fname : rawstring, xSize : int, ySize : int, zSize: int)
+      var fid = HDF5.H5Fcreate(fname, HDF5.H5F_ACC_TRUNC,
                                HDF5.H5P_DEFAULT, HDF5.H5P_DEFAULT)
       var dataSpace : int32
       escape
-        if self:isPlain() then
+        if self:isPlain() or self:isCoupled() then
           emit quote
             var sizes : HDF5.hsize_t[1]
-            sizes[0] = [self:Size()]
+            sizes[0] = xSize
             dataSpace = HDF5.H5Screate_simple(1, sizes, [&uint64](0))
           end
         elseif self:isGrid() then
@@ -1939,16 +1956,10 @@ if USE_HDF then
             -- Legion defaults to column-major layout, so we have to reverse.
             -- This implies that x and z will be flipped in the output file.
             var sizes : HDF5.hsize_t[3]
-            sizes[2] = [self:Dims()[1]]
-            sizes[1] = [self:Dims()[2]]
-            sizes[0] = [self:Dims()[3]]
+            sizes[2] = xSize
+            sizes[1] = ySize
+            sizes[0] = zSize
             dataSpace = HDF5.H5Screate_simple(3, sizes, [&uint64](0))
-          end
-        elseif self:isCoupled() then
-          emit quote
-            var sizes : HDF5.hsize_t[1]
-            sizes[0] = [self:primPartSize()] * NUM_PRIM_PARTS
-            dataSpace = HDF5.H5Screate_simple(1, sizes, [&uint64](0))
           end
         else assert(false) end
         local header = newlist() -- terralib.quote*
@@ -2061,10 +2072,30 @@ if USE_HDF then
     local p_r = self:primPartSymbol()
     local s = self:copyRegionSymbol()
     local p_s = self:copyPrimPartSymbol()
+    local xSize, ySize, zSize -- RG.rexpr
+    if self:isPlain() then
+      xSize = rexpr [self:Size():varSymbol()] end
+      ySize = rexpr -1 end
+      zSize = rexpr -1 end
+    elseif self:isGrid() then
+      local xNum = self:xNum():varSymbol()
+      local yNum = self:yNum():varSymbol()
+      local zNum = self:zNum():varSymbol()
+      local xBnum = self:xBnum():varSymbol()
+      local yBnum = self:yBnum():varSymbol()
+      local zBnum = self:zBnum():varSymbol()
+      xSize = rexpr xNum + 2*xBnum end
+      ySize = rexpr yNum + 2*yBnum end
+      zSize = rexpr zNum + 2*zBnum end
+    elseif self:isCoupled() then
+      xSize = rexpr [self:primPartSize()] * NUM_PRIM_PARTS end
+      ySize = rexpr -1 end
+      zSize = rexpr -1 end
+    else assert(false) end
     return rquote
       var filename = [rawstring](C.malloc(256))
       C.snprintf(filename, 256, file, vals)
-      create(filename)
+      create(filename, xSize, ySize, zSize)
       attach(hdf5, s.[flds], filename, RG.file_read_write)
       for c in [A.primColors()] do
         var p_r_c = p_r[c]
@@ -2085,7 +2116,8 @@ if USE_HDF then
     if self:isCoupled() then
       assert(flds:find(self:CouplingField():Name()))
       flds:insert('__valid')
-      primPartQuote = self:emitPrimPartCheck()
+      -- XXX: Skipping primary-partition check due to Regent weirdness
+      primPartQuote = rquote end
     end
     local r = self:regionSymbol()
     local p_r = self:primPartSymbol()
@@ -2103,12 +2135,224 @@ if USE_HDF then
         release(p_s_c.[flds])
       end
       detach(hdf5, s.[flds])
-      C.free(filename)
+      C.free(filename);
       [primPartQuote]
     end
   end
 
 end -- if USE_HDF
+
+-------------------------------------------------------------------------------
+-- Parsing runtime configuration values
+-------------------------------------------------------------------------------
+
+local JSON = terralib.includec('json.h')
+
+local Enum = {}
+
+-- string* -> Enum
+function A.Enum(...)
+  local enum = setmetatable({}, Enum)
+  enum.__choices = {...}
+  for i,val in ipairs({...}) do
+    assert(type(val) == 'string')
+    enum[val] = i-1
+  end
+  return enum
+end
+
+-- A -> bool
+local function equalsDoubleVec(x)
+  return terralib.types.istype(x) and x:isarray() and x.type == double
+end
+
+-- ConfigMap = map(string,ConfigKind)
+-- ConfigKind = Enum | int | double | double[N] | ConfigMap
+
+-- () -> RG.symbol
+A.configSymbol = terralib.memoize(function()
+  return RG.newsymbol(nil, 'config')
+end)
+
+-- ConfigMap
+local CONFIG_MAP = {}
+
+-- () -> terralib.struct
+A.configStruct = terralib.memoize(function()
+  local function fillStruct(struct_, map)
+    for fld,kind in pairs(map) do
+      if getmetatable(kind) == Enum then
+        struct_.entries:insert({field=fld, type=int})
+      elseif kind == int or kind == double or equalsDoubleVec(kind) then
+        struct_.entries:insert({field=fld, type=kind})
+      else
+        local nested = terralib.types.newstruct(fld)
+        fillStruct(nested, kind)
+        struct_.entries:insert({field=fld, type=nested})
+      end
+    end
+    if DEBUG then prettyPrintStruct(struct_) end
+  end
+  local s = terralib.types.newstruct('Config')
+  fillStruct(s, CONFIG_MAP)
+  return s
+end)
+
+-- string, terralib.expr? -> terralib.quote
+local function errorOut(msg, name)
+  if name then
+    return quote
+      C.printf('%s for option %s\n', msg, name)
+      C.exit(1)
+    end
+  else
+    return quote
+      C.printf('%s\n', msg)
+      C.exit(1)
+    end
+  end
+end
+
+-- terralib.symbol, terralib.expr, terralib.expr, ConfigKind -> terralib.quote
+local function emitValueParser(name, lval, rval, kind)
+  if getmetatable(kind) == Enum then
+    return quote
+      if [rval].type ~= JSON.json_string then
+        [errorOut('Wrong type', name)]
+      end
+      var found = false
+      escape for i,choice in ipairs(kind.__choices) do emit quote
+        if C.strcmp([rval].u.string.ptr, choice) == 0 then
+          [lval] = i-1
+          found = true
+        end
+      end end end
+      if not found then
+        [errorOut('Unexpected value', name)]
+      end
+    end
+  elseif kind == int then
+    return quote
+      if [rval].type ~= JSON.json_integer then
+        [errorOut('Wrong type', name)]
+      end
+      [lval] = [rval].u.integer
+    end
+  elseif kind == double then
+    return quote
+      if [rval].type ~= JSON.json_double then
+        [errorOut('Wrong type', name)]
+      end
+      [lval] = [rval].u.dbl
+    end
+  elseif equalsDoubleVec(kind) then
+    return quote
+      if [rval].type ~= JSON.json_array then
+        [errorOut('Wrong type', name)]
+      end
+      if [rval].u.array.length ~= [kind.N] then
+        [errorOut('Wrong length', name)]
+      end
+      for i = 0,[kind.N] do
+        var rval_i = [rval].u.array.values[i]
+        if rval_i.type ~= JSON.json_double then
+          [errorOut('Wrong element type', name)]
+        end
+        [lval][i] = rval_i.u.dbl
+      end
+    end
+  else
+    return quote
+      var totalParsed = 0
+      if [rval].type ~= JSON.json_object then
+        [errorOut('Wrong type', name)]
+      end
+      for i = 0,[rval].u.object.length do
+        var nodeName = [rval].u.object.values[i].name
+        var nodeValue = [rval].u.object.values[i].value
+        var parsed = false
+        escape for fld,subKind in pairs(kind) do emit quote
+          if C.strcmp(nodeName, fld) == 0 then
+            [emitValueParser(nodeName, `[lval].[fld], nodeValue, subKind)]
+            parsed = true
+          end
+        end end end
+        if parsed then
+          totalParsed = totalParsed + 1
+        else
+          C.printf('Ignoring option %s\n', nodeName)
+        end
+      end
+      -- TODO: Assuming the json file contains no duplicate values
+      if totalParsed < [UTIL.tableSize(kind)] then
+        [errorOut('Missing options from config file')]
+      end
+    end
+  end
+end
+
+-- () -> (&int8 -> ...)
+local emitConfigParser = terralib.memoize(function()
+  local configStruct = A.configStruct()
+  local terra parseConfig(filename : &int8) : configStruct
+    var config : configStruct
+    var f = C.fopen(filename, 'r');
+    if f == nil then [errorOut('Cannot open config file')] end
+    var res1 = C.fseek(f, 0, C.SEEK_END);
+    if res1 ~= 0 then [errorOut('Cannot seek to end of config file')] end
+    var len = C.ftell(f);
+    if len < 0 then [errorOut('Cannot ftell config file')] end
+    var res2 = C.fseek(f, 0, C.SEEK_SET);
+    if res2 ~= 0 then [errorOut('Cannot seek to start of config file')] end
+    var buf = [&int8](C.malloc(len));
+    if buf == nil then [errorOut('Malloc error while parsing config')] end
+    var res3 = C.fread(buf, 1, len, f);
+    if res3 < len then [errorOut('Cannot read from config file')] end
+    C.fclose(f);
+    var errMsg : int8[256]
+    var settings = JSON.json_settings{ 0, 0, nil, nil, nil, 0 }
+    settings.settings = JSON.json_enable_comments
+    var root = JSON.json_parse_ex(&settings, buf, len, errMsg)
+    if root == nil then
+      C.printf('JSON parsing error: %s\n', errMsg)
+      C.exit(1)
+    end
+    [emitValueParser('<root>', config, root, CONFIG_MAP)]
+    JSON.json_value_free(root)
+    C.free(buf)
+    return config
+  end
+  A.registerFun(parseConfig, 'parseConfig')
+  return parseConfig
+end)
+
+-- string, Enum | int | double | double[N] -> M.AST.Expr
+function A.readConfig(name, type)
+  assert(getmetatable(type) == Enum or type == int or type == double or
+         equalsDoubleVec(type))
+  local map = CONFIG_MAP
+  local fields = name:split('.')
+  for i,fld in ipairs(fields) do
+    if i == #fields then
+      if map[fld] then assert(map[fld] == type) else map[fld] = type end
+    else
+      if not map[fld] then map[fld] = {} end
+      map = map[fld]
+    end
+  end
+  return M.AST.ReadConfig(name)
+end
+
+-- string, Enum | int | double | double[N] -> PRE.Global
+function A.globalFromConfig(name, type)
+  local lType =
+    getmetatable(type) == Enum and L.int                      or
+    type == int                and L.int                      or
+    type == double             and L.double                   or
+    equalsDoubleVec(type)      and L.vector(L.double, type.N) or
+    assert(false)
+  return L.Global(name, lType, A.readConfig(name, type))
+end
 
 -------------------------------------------------------------------------------
 -- Control program translation
@@ -2268,6 +2512,9 @@ end
 function M.AST.Inline:toRQuote()
   return self.quot
 end
+function M.AST.Error:toRQuote()
+  return rquote RG.assert(false, [self.msg]) end
+end
 
 -- () -> RG.rexpr
 function M.AST.Cond:toRExpr()
@@ -2326,6 +2573,23 @@ function M.AST.UnaryOp:toRExpr()
   return
     (self.op == '-') and rexpr -a end or
     assert(false)
+end
+function M.AST.Array:toRExpr()
+  return rexpr array([self.elems:map(function(e) return e:toRExpr() end)]) end
+end
+function M.AST.Index:toRExpr()
+  return rexpr [self.base:toRExpr()][ [self.index] ] end
+end
+function M.AST.ReadConfig:toRExpr()
+  local expr = rexpr [A.configSymbol()] end
+  local fields = self.name:split('.')
+  for _,fld in ipairs(fields) do
+    expr = rexpr expr.[fld] end
+  end
+  return expr
+end
+function M.AST.Cond2Expr:toRExpr()
+  return self.cond:toRExpr()
 end
 
 -- M.AST.FillField -> RG.rquote*
@@ -2391,12 +2655,13 @@ R.Subset.subRegionSymbol = terralib.memoize(function(self)
   return RG.newsymbol(nil, idSanitize(self:FullName()))
 end)
 
--- (()->())?, (string*)? -> ()
-function A.translateAndRun(mapper_registration, link_flags)
+-- M.AST.Expr, M.AST.Expr, M.AST.Expr -> ()
+function A.translate(xTiles, yTiles, zTiles)
   local header = newlist() -- RG.rquote*
   local body = newlist() -- RG.rquote*
   -- Collect declarations
-  local globalInits = {} -- map(PRE.Global, M.ExprConst)
+  local globals = newlist() -- PRE.Global*
+  local globalInits = {} -- map(PRE.Global, M.AST.Expr)
   local rels = newlist() -- R.Relation*
   for _,decl in ipairs(M.decls()) do
     if M.AST.NewField.check(decl) then
@@ -2404,59 +2669,36 @@ function A.translateAndRun(mapper_registration, link_flags)
     elseif M.AST.NewFunction.check(decl) then
       -- Do nothing
     elseif M.AST.NewGlobal.check(decl) then
+      globals:insert(decl.global)
       globalInits[decl.global] = decl.init
     elseif M.AST.NewRelation.check(decl) then
       rels:insert(decl.rel)
-    elseif M.AST.NewDivision.check(decl) then
-      -- Do nothing
     else assert(false) end
   end
+  -- Emit configuration parsing
+  local parseConfig = emitConfigParser()
+  header:insert(rquote
+    var args = RG.c.legion_runtime_get_input_args()
+    if args.argc < 2 or args.argv[1][0] == 45 then -- 45 == '-'
+      C.printf('Usage: %s <config.json> ...\n', args.argv[0])
+      C.exit(1)
+    end
+    var [A.configSymbol()] = parseConfig(args.argv[1])
+  end)
   -- Emit global declarations
-  for g,val in pairs(globalInits) do
+  header:insert(rquote
+    var [NX] = [xTiles:toRExpr()]
+    var [NY] = [yTiles:toRExpr()]
+    var [NZ] = [zTiles:toRExpr()]
+  end)
+  for _,g in ipairs(globals) do
     header:insert(rquote
-      var [g:varSymbol()] = [toRConst(val, g:Type())]
+      var [g:varSymbol()] = [globalInits[g]:toRExpr()]
     end)
   end
-  -- Emit region declarations and user-defined divisions
+  -- Emit region declarations
   for _,rel in ipairs(rels) do
     header:insert(rel:emitRegionInit())
-    for _,div in ipairs(rel:Divisions()) do
-      local colors = RG.newsymbol(nil, 'colors')
-      local coloring = RG.newsymbol(nil, 'coloring')
-      header:insert(rquote
-        var [colors] = ispace(int1d, [#div])
-        var [coloring] = RG.c.legion_domain_point_coloring_create()
-      end)
-      for i,subset in ipairs(div) do
-        local rect = subset:Rectangle() -- int[1-3][2]
-        local rectExpr =
-          (#rect == 1) and rexpr
-            rect1d{ lo = [rect[1][1]], hi = [rect[1][2]] }
-          end or
-          (#rect == 3) and rexpr
-            rect3d{
-              lo = int3d{ x=[rect[1][1]], y=[rect[2][1]], z=[rect[3][1]] },
-              hi = int3d{ x=[rect[1][2]], y=[rect[2][2]], z=[rect[3][2]] }}
-          end or
-          assert(false)
-        header:insert(rquote
-          RG.c.legion_domain_point_coloring_color_domain
-            (coloring, int1d(i-1), rectExpr)
-        end)
-      end
-      local p = RG.newsymbol(nil, 'p')
-      header:insert(rquote
-        var [p] = partition(disjoint, [rel:regionSymbol()], coloring, colors)
-      end)
-      for i,subset in ipairs(div) do
-        header:insert(rquote
-          var [subset:subRegionSymbol()] = p[i-1]
-        end)
-      end
-      header:insert(rquote
-        RG.c.legion_domain_point_coloring_destroy(coloring)
-      end)
-    end
   end
   -- Emit primary partitioning scheme
   header:insert(rquote
@@ -2485,7 +2727,6 @@ function A.translateAndRun(mapper_registration, link_flags)
       body:insert(rel:emitValidInit())
     end
   end
-
   -- Process other statements
   for _,s in ipairs(M.stmts()) do
     if not M.AST.FillField.check(s) then
@@ -2522,9 +2763,5 @@ function A.translateAndRun(mapper_registration, link_flags)
   end
   A.registerTask(main, 'main')
   -- Emit to executable
-  link_flags = link_flags or newlist()
-  for idx = 1, #LIBS do
-    link_flags[#link_flags + 1] = LIBS[idx]
-  end
-  RG.saveobj(main, OBJNAME, 'executable', mapper_registration, link_flags)
+  RG.saveobj(main, OBJNAME, 'executable', nil, LIBS)
 end

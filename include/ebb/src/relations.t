@@ -31,7 +31,6 @@ local M     = require "ebb.src.main"
 local UTIL  = require "ebb.src.util"
 
 local all        = UTIL.all
-local copy_table = UTIL.copy_table
 
 -------------------------------------------------------------------------------
 
@@ -51,8 +50,22 @@ local function is_valid_lua_identifier(name)
 end
 
 local function is_num(x) return type(x) == 'number' end
+
 local function is_bool(x) return type(x) == 'boolean' end
+
 local function is_int(x) return type(x) == 'number' and x == math.floor(x) end
+
+local function is_int_global(x)
+  return Pre.is_global(x) and x:Type() == T.int
+end
+
+local function is_double_global(x)
+  return Pre.is_global(x) and x:Type() == T.double
+end
+
+local function is_bool_global(x)
+  return Pre.is_global(x) and x:Type() == T.bool
+end
 
 -------------------------------------------------------------------------------
 
@@ -87,131 +100,112 @@ function Relation:isPlain()       return self._mode == 'PLAIN'      end
 function Relation:isGrid()        return self._mode == 'GRID'       end
 function Relation:isCoupled()     return self._mode == 'COUPLED'    end
 
-local errorMsg = [[NewRelation must be called as follows:
-local myrel = L.NewRelation {
-  name = string,
-  mode = 'PLAIN' | 'GRID' | 'COUPLED',
-  --------------------------------------------------------------------------
+local errorMsg = [[NewRelation must be called with the following parameters:
+  name : string
+  mode : 'PLAIN' | 'GRID' | 'COUPLED'
   -- if mode == 'PLAIN':
-  --------------------------------------------------------------------------
-  size = 35,
-  --------------------------------------------------------------------------
+  size : L.Global(L.int)
   -- if mode == 'GRID':
-  --------------------------------------------------------------------------
-  dims = {#,#,#}, -- number of cells in x,y,z (incl. boundary)
-  origin = {#,#,#}, -- coordinates of grid origin (incl. boundary)
-  width = {#,#,#}, -- x,y,z width of grid (incl. boundary)
-  [boundary_depth = {#,#,#},] -- depth of boundary region (default: {1,1,1})
-                              -- must be 0 on directions that are periodic
-  [periodic = {bool,bool,bool},] -- use periodic boundary conditions
-                                 -- (default: {false,false,false})
-  --------------------------------------------------------------------------
+  xNum, yNum, zNum : L.Global(L.int)
+  xOrigin, yOrigin, zOrigin : L.Global(L.double)
+  xWidth, yWidth, zWidth : L.Global(L.double)
+  xBnum, yBnum, zBnum : L.Global(L.int)
+  xPeriodic, yPeriodic, zPeriodic : L.Global(L.bool)
   -- if mode == 'COUPLED':
-  --------------------------------------------------------------------------
-  size = 100,
-  coupled_with = other_relation,
-  coupling_field = 'fld_name',
-  max_skew = 3.0,
-  max_xfer_num = 10,
-  xfer_stencil = {{0,0,1},{0,0,-1},...},
-}]]
+  size : L.Global(L.int)
+  coupled_with : Relation
+  coupling_field : string
+  max_skew : L.Global(L.double)
+  max_xfer_num : L.Global(L.int)
+  xfer_stencil : int[3]*]]
 
 local relation_uid = 0
 function R.NewRelation(params)
   -- Check the parameters
   local function checkParams(params)
-    local check =
-      type(params) == 'table' and
-      is_valid_lua_identifier(params.name) and
-      (params.mode == 'PLAIN' or
-       params.mode == 'GRID' or
-       params.mode == 'COUPLED')
+    local check = true
+      and type(params) == 'table'
+      and is_valid_lua_identifier(params.name)
+      and (params.mode == 'PLAIN' or
+           params.mode == 'GRID' or
+           params.mode == 'COUPLED')
     if params.mode == 'PLAIN' then
-      check = check and
-        is_int(params.size)
+      check = check
+        and params.size and is_int_global(params.size)
     elseif params.mode == 'GRID' then
-      check = check and
-        terralib.israwlist(params.dims) and
-        #params.dims == 3 and all(params.dims, is_int) and
-        terralib.israwlist(params.origin) and
-        #params.origin == 3 and all(params.origin, is_num) and
-        terralib.israwlist(params.width) and
-        #params.width == 3 and all(params.width, is_num)
-      local bd = params.boundary_depth
-      local pb = params.periodic_boundary
-      if bd then
-        check = check and
-          terralib.israwlist(bd) and #bd == 3 and all(bd, is_num)
-      end
-      if pb then
-        check = check and
-          terralib.israwlist(pb) and #pb == 3 and all(pb, is_bool)
-      end
-      if bd and pb then
-        check = check and
-          not (pb[1] and bd[1] ~= 0) and
-          not (pb[2] and bd[2] ~= 0) and
-          not (pb[3] and bd[3] ~= 0)
-      end
+      check = check
+        and params.xNum and is_int_global(params.xNum)
+        and params.yNum and is_int_global(params.yNum)
+        and params.zNum and is_int_global(params.zNum)
+        and params.xOrigin and is_double_global(params.xOrigin)
+        and params.yOrigin and is_double_global(params.yOrigin)
+        and params.zOrigin and is_double_global(params.zOrigin)
+        and params.xWidth and is_double_global(params.xWidth)
+        and params.yWidth and is_double_global(params.yWidth)
+        and params.zWidth and is_double_global(params.zWidth)
+        and params.xBnum and is_int_global(params.xBnum)
+        and params.yBnum and is_int_global(params.yBnum)
+        and params.zBnum and is_int_global(params.zBnum)
+        and params.xPeriodic and is_bool_global(params.xPeriodic)
+        and params.yPeriodic and is_bool_global(params.yPeriodic)
+        and params.zPeriodic and is_bool_global(params.zPeriodic)
     elseif params.mode == 'COUPLED' then
-      check = check and
-        is_int(params.size) and
-        is_relation(params.coupled_with) and
-        is_valid_lua_identifier(params.coupling_field) and
-        is_num(params.max_skew) and
-        is_int(params.max_xfer_num) and
-        terralib.israwlist(params.xfer_stencil) and
-        all(params.xfer_stencil, function(dir) return
-          terralib.israwlist(dir) and #dir == 3 and all(dir, is_int)
-        end)
+      check = check
+        and params.size and is_int_global(params.size)
+        and is_relation(params.coupled_with)
+        and is_valid_lua_identifier(params.coupling_field)
+        and params.max_skew and is_double_global(params.max_skew)
+        and params.max_xfer_num and is_int_global(params.max_xfer_num)
+        and terralib.israwlist(params.xfer_stencil)
+        and all(params.xfer_stencil, function(dir) return
+                  terralib.israwlist(dir) and #dir == 3 and all(dir, is_int)
+                end)
     else assert(false) end
     return check
   end
   if not checkParams(params) then error(errorMsg, 2) end
 
-  -- construct the relation
+  -- Construct the relation
   local rel = setmetatable( {
     _name       = params.name,
     _mode       = params.mode,
     _uid        = relation_uid,
     _fields     = terralib.newlist(),
-    _divisions  = terralib.newlist(),
     _macros     = terralib.newlist(),
     _functions  = terralib.newlist(),
   }, Relation)
   relation_uid = relation_uid + 1 -- increment unique id counter
 
-  -- perform mode-dependent setup
-  local size
+  -- Perform mode-dependent setup
   if params.mode == 'PLAIN' then
-    -- size calculation
-    size = params.size
+    rawset(rel, '_size',  params.size)
   elseif params.mode == 'GRID' then
-    -- size calculation
-    size = params.dims[1] * params.dims[2] * params.dims[3]
-    -- defaults
-    local bd_depth = params.boundary_depth or {1, 1, 1}
-    local periodic = params.periodic       or {false, false, false}
-    -- mode-dependent values
-    rawset(rel, '_dims',              copy_table(params.dims))
-    rawset(rel, '_origin',            copy_table(params.origin))
-    rawset(rel, '_width',             copy_table(params.width))
-    rawset(rel, '_boundary_depth',    copy_table(bd_depth))
-    rawset(rel, '_periodic',          copy_table(periodic))
+    rawset(rel, '_xNum', params.xNum)
+    rawset(rel, '_yNum', params.yNum)
+    rawset(rel, '_zNum', params.zNum)
+    rawset(rel, '_xOrigin', params.xOrigin)
+    rawset(rel, '_yOrigin', params.yOrigin)
+    rawset(rel, '_zOrigin', params.zOrigin)
+    rawset(rel, '_xWidth', params.xWidth)
+    rawset(rel, '_yWidth', params.yWidth)
+    rawset(rel, '_zWidth', params.zWidth)
+    rawset(rel, '_xBnum', params.xBnum)
+    rawset(rel, '_yBnum', params.yBnum)
+    rawset(rel, '_zBnum', params.zBnum)
+    rawset(rel, '_xPeriodic', params.xPeriodic)
+    rawset(rel, '_yPeriodic', params.yPeriodic)
+    rawset(rel, '_zPeriodic', params.zPeriodic)
     rawset(rel, '_coarsening_fields', terralib.newlist())
   elseif params.mode == 'COUPLED' then
-    -- size calculation
-    size = params.size
-    -- mode-dependent values
+    rawset(rel, '_size',  params.size)
     rawset(rel, '_coupling_field',
            rel:NewField(params.coupling_field, params.coupled_with))
     rawset(rel, '_max_skew', params.max_skew)
     rawset(rel, '_max_xfer_num', params.max_xfer_num)
     rawset(rel, '_xfer_stencil', terralib.newlist(params.xfer_stencil))
   else assert(false) end
-  rawset(rel, '_size',  size)
 
-  -- register & return the relation
+  -- Register & return the relation
   M.decls():insert(M.AST.NewRelation(rel))
   return rel
 end
@@ -229,22 +223,20 @@ function Relation:Mode()
 end
 
 function Relation:Size()
+  assert(self:isPlain() or self:isCoupled())
   return self._size
 end
 
-function Relation:Dims()
-  if not self:isGrid() then
-    return { self:Size() }
-  end
-  return copy_table(self._dims)
+function Relation:NumDims()
+  return
+    self:isPlain()   and 1 or
+    self:isGrid()    and 3 or
+    self:isCoupled() and 1 or
+    assert(false)
 end
 
 function Relation:Fields()
   return self._fields
-end
-
-function Relation:Divisions()
-  return self._divisions
 end
 
 function Relation:foreach(user_func, ...)
@@ -264,31 +256,69 @@ end
 --[[  Grids                                                                ]]--
 -------------------------------------------------------------------------------
 
-function R.Relation:Origin()
+function R.Relation:xNum()
   assert(self:isGrid())
-  return copy_table(self._origin)
+  return self._xNum
+end
+function R.Relation:yNum()
+  assert(self:isGrid())
+  return self._yNum
+end
+function R.Relation:zNum()
+  assert(self:isGrid())
+  return self._zNum
 end
 
-function R.Relation:Width()
+function R.Relation:xOrigin()
   assert(self:isGrid())
-  return copy_table(self._width)
+  return self._xOrigin
+end
+function R.Relation:yOrigin()
+  assert(self:isGrid())
+  return self._yOrigin
+end
+function R.Relation:zOrigin()
+  assert(self:isGrid())
+  return self._zOrigin
 end
 
-function R.Relation:BoundaryDepth()
+function R.Relation:xWidth()
   assert(self:isGrid())
-  return copy_table(self._boundary_depth)
+  return self._xWidth
+end
+function R.Relation:yWidth()
+  assert(self:isGrid())
+  return self._yWidth
+end
+function R.Relation:zWidth()
+  assert(self:isGrid())
+  return self._zWidth
 end
 
-function R.Relation:Periodic()
+function R.Relation:xBnum()
   assert(self:isGrid())
-  return copy_table(self._periodic)
+  return self._xBnum
+end
+function R.Relation:yBnum()
+  assert(self:isGrid())
+  return self._yBnum
+end
+function R.Relation:zBnum()
+  assert(self:isGrid())
+  return self._zBnum
 end
 
-function R.Relation:CellWidth()
+function R.Relation:xPeriodic()
   assert(self:isGrid())
-  return { self._width[1] / (1.0 * self._dims[1]),
-           self._width[2] / (1.0 * self._dims[2]),
-           self._width[3] / (1.0 * self._dims[3]) }
+  return self._xPeriodic
+end
+function R.Relation:yPeriodic()
+  assert(self:isGrid())
+  return self._yPeriodic
+end
+function R.Relation:zPeriodic()
+  assert(self:isGrid())
+  return self._zPeriodic
 end
 
 function R.Relation:CoarseningFields()
@@ -461,64 +491,6 @@ local function is_int(obj)
   return type(obj) == 'number' and obj % 1 == 0
 end
 
-local function is_subrectangle(rel, obj)
-  local dims = rel:Dims()
-  if not terralib.israwlist(obj) or #obj ~= #dims then return false end
-  for i,r in ipairs(obj) do
-    if not terralib.israwlist(r) or #r ~= 2 then return false end
-    if not is_int(r[1]) or not is_int(r[2]) then return false end
-    if r[1] < 0 or r[2] < 0 or r[1] >= dims[i] or r[2] >= dims[i] then
-      return false
-    end
-  end
-  return true
-end
-
-function Relation:NewDivision( rects )
-  if not self:isGrid() then
-    error("NewDivision(): Can only be called on grid-typed relations", 2)
-  end
-  local division = terralib.newlist()
-  for name,rect in pairs(rects) do
-    if type(name) ~= "string" then
-      error("NewDivision(): Subset names must be strings", 2)
-    end
-    if not is_valid_lua_identifier(name) then
-      error(valid_name_err_msg.subset, 2)
-    end
-    if self[name] then
-      error("Cannot create a new subset with name '"..name.."'  "..
-              "That name is already being used.", 2)
-    end
-    if not type(rect) == 'table' or not terralib.israwlist(rect) then
-      error("NewDivision(): Rectangles must be lists", 2)
-    end
-    if is_subrectangle(self, rect) then
-      local subset = setmetatable({
-        _owner     = self,
-        _name      = name,
-        _rectangle = rect,
-      }, Subset)
-      rawset(self, name, subset)
-      division:insert(subset)
-    end
-    --if not is_subrectangle(self, rect) then
-    --  error("NewDivision(): Rectangle was not a list of "..(#self:Dims())..
-    --        " range pairs lying inside the grid", 2)
-    --end
-    ---- TODO: Assuming the rectangles are disjoint, and cover the entire grid.
-    --local subset = setmetatable({
-    --  _owner     = self,
-    --  _name      = name,
-    --  _rectangle = rect,
-    --}, Subset)
-    --rawset(self, name, subset)
-    --division:insert(subset)
-  end
-  self._divisions:insert(division)
-  M.decls():insert(M.AST.NewDivision(division))
-end
-
 -------------------------------------------------------------------------------
 --[[  Fields                                                               ]]--
 -------------------------------------------------------------------------------
@@ -536,9 +508,6 @@ function Field:FullName()
 end
 function Field:Size()
   return self._owner:Size()
-end
-function Field:ConcreteSize()
-  return self._owner:ConcreteSize()
 end
 function Field:Type()
   return self._type
@@ -589,9 +558,7 @@ function Relation:NewField(name, typ)
 end
 
 function Field:Fill(val)
-  if not T.luaValConformsToType(val, self._type) then
-    error('Value to be loaded does not match field type', 2)
-  end
+  if M.isExprConst(val) then val = M.AST.Const(val) end
   M.stmts():insert(M.AST.FillField(self, val))
 end
 
