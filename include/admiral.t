@@ -2198,17 +2198,28 @@ A.configStruct = terralib.memoize(function()
   return s
 end)
 
--- terralib.quote
-local errorOut = quote
-  C.printf('Error while parsing configuration\n')
-  C.exit(1)
+-- string, terralib.expr? -> terralib.quote
+local function errorOut(msg, name)
+  if name then
+    return quote
+      C.printf('%s for option %s\n', msg, name)
+      C.exit(1)
+    end
+  else
+    return quote
+      C.printf('%s\n', msg)
+      C.exit(1)
+    end
+  end
 end
 
--- terralib.expr, terralib.expr, ConfigKind -> terralib.quote
-local function emitValueParser(lval, rval, kind)
+-- terralib.symbol, terralib.expr, terralib.expr, ConfigKind -> terralib.quote
+local function emitValueParser(name, lval, rval, kind)
   if getmetatable(kind) == Enum then
     return quote
-      if [rval].type ~= JSON.json_string then [errorOut] end
+      if [rval].type ~= JSON.json_string then
+        [errorOut('Wrong type', name)]
+      end
       var found = false
       escape for i,choice in ipairs(kind.__choices) do emit quote
         if C.strcmp([rval].u.string.ptr, choice) == 0 then
@@ -2216,46 +2227,66 @@ local function emitValueParser(lval, rval, kind)
           found = true
         end
       end end end
-      if not found then [errorOut] end
+      if not found then
+        [errorOut('Unexpected value', name)]
+      end
     end
   elseif kind == int then
     return quote
-      if [rval].type ~= JSON.json_integer then [errorOut] end
+      if [rval].type ~= JSON.json_integer then
+        [errorOut('Wrong type', name)]
+      end
       [lval] = [rval].u.integer
     end
   elseif kind == double then
     return quote
-      if [rval].type ~= JSON.json_double then [errorOut] end
+      if [rval].type ~= JSON.json_double then
+        [errorOut('Wrong type', name)]
+      end
       [lval] = [rval].u.dbl
     end
   elseif equalsDoubleVec(kind) then
     return quote
-      if [rval].type ~= JSON.json_array then [errorOut] end
-      if [rval].u.array.length ~= [kind.N] then [errorOut] end
+      if [rval].type ~= JSON.json_array then
+        [errorOut('Wrong type', name)]
+      end
+      if [rval].u.array.length ~= [kind.N] then
+        [errorOut('Wrong length', name)]
+      end
       for i = 0,[kind.N] do
         var rval_i = [rval].u.array.values[i]
-        if rval_i.type ~= JSON.json_double then [errorOut] end
+        if rval_i.type ~= JSON.json_double then
+          [errorOut('Wrong element type', name)]
+        end
         [lval][i] = rval_i.u.dbl
       end
     end
   else
     return quote
       var totalParsed = 0
-      if [rval].type ~= JSON.json_object then [errorOut] end
+      if [rval].type ~= JSON.json_object then
+        [errorOut('Wrong type', name)]
+      end
       for i = 0,[rval].u.object.length do
         var nodeName = [rval].u.object.values[i].name
         var nodeValue = [rval].u.object.values[i].value
         var parsed = false
         escape for fld,subKind in pairs(kind) do emit quote
           if C.strcmp(nodeName, fld) == 0 then
-            [emitValueParser(`[lval].[fld], nodeValue, subKind)]
+            [emitValueParser(nodeName, `[lval].[fld], nodeValue, subKind)]
             parsed = true
           end
         end end end
-        if parsed then totalParsed = totalParsed + 1 end
+        if parsed then
+          totalParsed = totalParsed + 1
+        else
+          C.printf('Ignoring option %s\n', nodeName)
+        end
       end
       -- TODO: Assuming the json file contains no duplicate values
-      if totalParsed < [UTIL.tableSize(kind)] then [errorOut] end
+      if totalParsed < [UTIL.tableSize(kind)] then
+        [errorOut('Missing options from config file')]
+      end
     end
   end
 end
@@ -2265,18 +2296,28 @@ local emitConfigParser = terralib.memoize(function()
   local configStruct = A.configStruct()
   local terra parseConfig(filename : &int8) : configStruct
     var config : configStruct
-    var f = C.fopen(filename, 'r');       if f == nil then [errorOut] end
-    var res1 = C.fseek(f, 0, C.SEEK_END); if res1 ~= 0 then [errorOut] end
-    var len = C.ftell(f);                 if len < 0 then [errorOut] end
-    var res2 = C.fseek(f, 0, C.SEEK_SET); if res2 ~= 0 then [errorOut] end
-    var buf = [&int8](C.malloc(len));     if buf == nil then [errorOut] end
-    var res3 = C.fread(buf, 1, len, f);   if res3 < len then [errorOut] end
+    var f = C.fopen(filename, 'r');
+    if f == nil then [errorOut('Cannot open config file')] end
+    var res1 = C.fseek(f, 0, C.SEEK_END);
+    if res1 ~= 0 then [errorOut('Cannot seek to end of config file')] end
+    var len = C.ftell(f);
+    if len < 0 then [errorOut('Cannot ftell config file')] end
+    var res2 = C.fseek(f, 0, C.SEEK_SET);
+    if res2 ~= 0 then [errorOut('Cannot seek to start of config file')] end
+    var buf = [&int8](C.malloc(len));
+    if buf == nil then [errorOut('Malloc error while parsing config')] end
+    var res3 = C.fread(buf, 1, len, f);
+    if res3 < len then [errorOut('Cannot read from config file')] end
     C.fclose(f);
+    var errMsg : int8[256]
     var settings = JSON.json_settings{ 0, 0, nil, nil, nil, 0 }
     settings.settings = JSON.json_enable_comments
-    var root = JSON.json_parse_ex(&settings, buf, len, nil)
-    if root == nil then [errorOut] end
-    [emitValueParser(config, root, CONFIG_MAP)]
+    var root = JSON.json_parse_ex(&settings, buf, len, errMsg)
+    if root == nil then
+      C.printf('JSON parsing error: %s\n', errMsg)
+      C.exit(1)
+    end
+    [emitValueParser('<root>', config, root, CONFIG_MAP)]
     JSON.json_value_free(root)
     C.free(buf)
     return config
