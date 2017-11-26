@@ -1097,10 +1097,10 @@ function FunContext:addGlobal(global)
   return sym
 end
 
--- AST.Symbol -> RG.symbol
-function FunContext:addLocal(lsym)
+-- AST.Symbol, T.Type -> RG.symbol
+function FunContext:addLocal(lsym, type)
   assert(not self.localMap[lsym])
-  local rsym = RG.newsymbol(nil, tostring(lsym))
+  local rsym = RG.newsymbol(toRType(type), tostring(lsym))
   self.localMap[lsym] = rsym
   return rsym
 end
@@ -1225,7 +1225,7 @@ function AST.Break:hasNoStencil()
   quit(self)
 end
 function AST.DeclStatement:hasNoStencil()
-  return self.initializer:hasNoStencil()
+  return not self.initializer or self.initializer:hasNoStencil()
 end
 function AST.DeleteStatement:hasNoStencil()
   return self.key:hasNoStencil()
@@ -1500,17 +1500,7 @@ function AST.Call:toRExpr(ctxt)
     if x == 0 and y == 0 and z == 0 then
       return base
     end
-    local xNum = ctxt:addGlobal(rel:xNum())
-    local yNum = ctxt:addGlobal(rel:yNum())
-    local zNum = ctxt:addGlobal(rel:zNum())
-    local xBnum = ctxt:addGlobal(rel:xBnum())
-    local yBnum = ctxt:addGlobal(rel:yBnum())
-    local zBnum = ctxt:addGlobal(rel:zBnum())
-    return rexpr (base + {x,y,z}) %
-      rect3d{
-        lo = int3d{x = 0,              y = 0,              z = 0             },
-        hi = int3d{x = xNum+2*xBnum-1, y = yNum+2*yBnum-1, z = zNum+2*zBnum-1}}
-    end
+    return rexpr (base + {x,y,z}) % [ctxt.relMap[rel]].bounds end
   end
   -- Assertion
   -- self.params[1] : AST.Expression
@@ -1800,10 +1790,11 @@ function AST.DeclStatement:toRQuote(ctxt)
   -- self.name        : AST.Symbol
   -- self.node_type   : T.Type
   -- self.initializer : AST.Expression
-  local rsym = ctxt:addLocal(self.name)
-  return rquote
-    var [rsym] = [self.initializer:toRExpr(ctxt)]
+  local rsym = ctxt:addLocal(self.name, self.node_type)
+  if self.initializer then
+    return rquote var [rsym] = [self.initializer:toRExpr(ctxt)] end
   end
+  return rquote var [rsym] end
 end
 function AST.DeleteStatement:toRQuote(ctxt)
   -- self.key : AST.Expression
@@ -1898,7 +1889,7 @@ function AST.NumericFor:toRQuote(ctxt)
   -- self.lower : AST.Expression
   -- self.upper : AST.Expression
   -- self.body  : AST.Block
-  local i = ctxt:addLocal(self.name)
+  local i = ctxt:addLocal(self.name, L.int)
   return rquote
     for [i] = [self.lower:toRExpr(ctxt)], [self.upper:toRExpr(ctxt)] do
       [self.body:toRQuote(ctxt)]
