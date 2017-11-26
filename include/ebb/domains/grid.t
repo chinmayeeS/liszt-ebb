@@ -70,35 +70,44 @@ local function addHelpers(cells)
   end))
 
   cells:NewFieldReadFunction('center', ebb(c)
-    var xcw = xWidth / xNum
-    var ycw = yWidth / yNum
-    var zcw = zWidth / zNum
-    var xro = xOrigin - xBnum * xcw
-    var yro = yOrigin - yBnum * ycw
-    var zro = zOrigin - zBnum * zcw
-    return L.vec3d({ xro + xcw * (L.double(L.xid(c)) + 0.5),
-                     yro + ycw * (L.double(L.yid(c)) + 0.5),
-                     zro + zcw * (L.double(L.zid(c)) + 0.5) })
+    return L.vec3d({ xOrigin + (xWidth/xNum) * (L.double(L.xid(c)-xBnum)+0.5),
+                     yOrigin + (yWidth/yNum) * (L.double(L.yid(c)-yBnum)+0.5),
+                     zOrigin + (zWidth/zNum) * (L.double(L.zid(c)-zBnum)+0.5) })
   end)
 
   rawset(cells, 'locate', ebb(pos)
     var xcw = xWidth / xNum
     var xro = xOrigin - xBnum * xcw
     var xpos = (pos[0] - xro) / xcw
+    var xrnum = xNum + 2*xBnum
     var xidx : L.uint64
-    if xPeriodic then xidx = wrap_idx(xpos) else xidx = clamp_idx(xpos) end
+    if xPeriodic then
+      xidx = wrap_idx(xpos, xrnum)
+    else
+      xidx = clamp_idx(xpos, xrnum)
+    end
     var ycw = yWidth / yNum
     var yro = yOrigin - yBnum * ycw
     var ypos = (pos[1] - yro) / ycw
+    var yrnum = yNum + 2*yBnum
     var yidx : L.uint64
-    if yPeriodic then yidx = wrap_idx(ypos) else yidx = clamp_idx(ypos) end
+    if yPeriodic then
+      yidx = wrap_idx(ypos, yrnum)
+    else
+      yidx = clamp_idx(ypos, yrnum)
+    end
     var zcw = zWidth / zNum
     var zro = zOrigin - zBnum * zcw
     var zpos = (pos[2] - zro) / zcw
+    var zrnum = zNum + 2*zBnum
     var zidx : L.uint64
-    if zPeriodic then zidx = wrap_idx(zpos) else zidx = clamp_idx(zpos) end
+    if zPeriodic then
+      zidx = wrap_idx(zpos, zrnum)
+    else
+      zidx = clamp_idx(zpos, zrnum)
+    end
     return L.UNSAFE_ROW({xidx, yidx, zidx}, cells)
-  end))
+  end)
 
   -- boundary depths
   cells:NewFieldMacro('xneg_depth', L.Macro(function(c)
@@ -147,14 +156,14 @@ function R.Relation:LinkWithCoarse(coarse, fldName)
 
   fine:CoarseningFields():insert(fine:NewField(fldName, coarse))
   local ebb SetCoarseningField(f : fine)
-    var xFactor = [fine.xNum] / [coarse.xNum]
-    var yFactor = [fine.yNum] / [coarse.yNum]
-    var zFactor = [fine.zNum] / [coarse.zNum]
+    var xFactor = fine.xNum / coarse.xNum
+    var yFactor = fine.yNum / coarse.yNum
+    var zFactor = fine.zNum / coarse.zNum
     if f.in_interior then
       f.[fldName] =
-        L.UNSAFE_ROW({(L.xid(f) - [fine.xBnum]) / xFactor + [coarse.xBnum],
-                      (L.yid(f) - [fine.yBnum]) / yFactor + [coarse.yBnum],
-                      (L.zid(f) - [fine.zBnum]) / zFactor + [coarse.zBnum]},
+        L.UNSAFE_ROW({(L.xid(f) - fine.xBnum) / xFactor + coarse.xBnum,
+                      (L.yid(f) - fine.yBnum) / yFactor + coarse.yBnum,
+                      (L.zid(f) - fine.zBnum) / zFactor + coarse.zBnum},
                      coarse)
     else
       f.[fldName] = L.UNSAFE_ROW({-1,-1,-1}, coarse)

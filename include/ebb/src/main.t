@@ -67,7 +67,7 @@ local ADT AST
   Stmt = Block { stmts : Stmt* }
        | ForEach { fun : Function, rel : Relation, subset : Subset? }
        | If { cond : Cond, thenBlock : Stmt?, elseBlock : Stmt? }
-       | FillField { fld : Field, val : ExprConst }
+       | FillField { fld : Field, val : Expr }
        | SetGlobal { global : Global, expr : Expr }
        | While { cond : Cond, spmd : boolean, body : Stmt? }
        | Do { spmd : boolean, body : Stmt? }
@@ -85,9 +85,10 @@ local ADT AST
        | GetGlobal { global : Global }
        | BinaryOp { op : string, lhs : Expr, rhs : Expr }
        | UnaryOp { op : string, arg : Expr }
-       | Array { elems : Expr }
-       | Index { base : Expr, index : int }
+       | Array { elems : Expr* }
+       | Index { base : Expr, index : number }
        | ReadConfig { name : string }
+       | Cond2Expr { cond : Cond }
   extern ExprConst isExprConst
   extern Field     isField
   extern Function  isFunction
@@ -140,13 +141,23 @@ function AST.Expr.__unm(x)
   return AST.UnaryOp('-', x)
 end
 
--- int -> AST.Expr
-function AST.Expr:__index(key)
-  if type(key) == 'number' and key == math.floor(key) then
-    return AST.Index(self, key)
+local function wrapIndex(class)
+  function class.__index(obj, key)
+    if type(key) == 'number' and key == math.floor(key) then
+      return AST.Index(obj, key)
+    end
+    local val = rawget(class, key)
+    if val then return val end
+    error('Key '..key..' not found in M.AST.Expr subclass')
   end
-  error('Non-integer indexing on main-program expression')
 end
+wrapIndex(AST.Const)
+wrapIndex(AST.GetGlobal)
+wrapIndex(AST.BinaryOp)
+wrapIndex(AST.UnaryOp)
+wrapIndex(AST.Array)
+wrapIndex(AST.Index)
+wrapIndex(AST.ReadConfig)
 
 -- ExprConst | AST.Expr, ExprConst | AST.Expr -> AST.Expr
 function M.MAX(lhs, rhs)
@@ -202,6 +213,11 @@ function M.ARRAY(elems)
   return AST.Array(terralib.newlist(elems):map(function(e)
     return isExprConst(e) and AST.Const(e) or e
   end))
+end
+
+-- AST.Cond -> AST.Expr
+function M.COND2EXPR(cond)
+  return AST.Cond2Expr(cond)
 end
 
 -------------------------------------------------------------------------------

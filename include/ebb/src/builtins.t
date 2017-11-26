@@ -189,17 +189,17 @@ function B.Affine.check(ast, ctxt)
     end
 
     -- get dimensions out
-    local dst_dims = dst_rel:Dims()
-    local src_dims = src_rel:Dims()
+    local dst_dims = dst_rel:NumDims()
+    local src_dims = src_rel:NumDims()
 
     -- now check the matrix argument type
     if not matrix.node_type:ismatrix() or
-       matrix.node_type.Nrow ~= #dst_dims or
-       matrix.node_type.Ncol ~= #src_dims + 1
+       matrix.node_type.Nrow ~= dst_dims or
+       matrix.node_type.Ncol ~= src_dims + 1
     then
         ctxt:error(ast[2], "Affine expects a matrix as the 2nd argument "..
             "with matching dimensions (needs to be "..
-            tostring(#dst_dims).."-by-"..tostring(#src_dims + 1))
+            tostring(dst_dims).."-by-"..tostring(src_dims + 1))
         return errorT
     end
     --if not matrix.node_type:isintegral() then
@@ -258,7 +258,7 @@ function B.UNSAFE_ROW.check(ast, ctxt)
         ctxt:error(ast, "UNSAFE_ROW can't be used for coupled relations.")
         return errorT
     end
-    local ndim = #rel:Dims()
+    local ndim = rel:NumDims()
     if ndim == 1 and addr_type ~= uint64T then
         ctxt:error(ast, "UNSAFE_ROW expected a uint64 as the first arg")
         return errorT

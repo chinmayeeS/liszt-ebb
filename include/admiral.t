@@ -2134,7 +2134,7 @@ if USE_HDF then
         release(p_s_c.[flds])
       end
       detach(hdf5, s.[flds])
-      C.free(filename)
+      C.free(filename);
       [primPartQuote]
     end
   end
@@ -2540,11 +2540,14 @@ function M.AST.Index:toRExpr()
 end
 function M.AST.ReadConfig:toRExpr()
   local expr = rexpr [A.configSymbol()] end
-  local fields = name:split('.')
+  local fields = self.name:split('.')
   for _,fld in ipairs(fields) do
     expr = rexpr expr.[fld] end
   end
   return expr
+end
+function M.AST.Cond2Expr:toRExpr()
+  return self.cond:toRExpr()
 end
 
 -- M.AST.FillField -> RG.rquote*

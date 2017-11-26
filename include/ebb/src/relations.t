@@ -56,15 +56,15 @@ local function is_bool(x) return type(x) == 'boolean' end
 local function is_int(x) return type(x) == 'number' and x == math.floor(x) end
 
 local function is_int_global(x)
-  return Pre.is_global(x) and x:Type() == L.int
+  return Pre.is_global(x) and x:Type() == T.int
 end
 
 local function is_double_global(x)
-  return Pre.is_global(x) and x:Type() == L.double
+  return Pre.is_global(x) and x:Type() == T.double
 end
 
 local function is_bool_global(x)
-  return Pre.is_global(x) and x:Type() == L.bool
+  return Pre.is_global(x) and x:Type() == T.bool
 end
 
 -------------------------------------------------------------------------------
@@ -100,7 +100,7 @@ function Relation:isPlain()       return self._mode == 'PLAIN'      end
 function Relation:isGrid()        return self._mode == 'GRID'       end
 function Relation:isCoupled()     return self._mode == 'COUPLED'    end
 
-local errorMsg = ''[[NewRelation must be called with the following parameters:
+local errorMsg = [[NewRelation must be called with the following parameters:
   name : string
   mode : 'PLAIN' | 'GRID' | 'COUPLED'
   -- if mode == 'PLAIN':
@@ -225,6 +225,14 @@ end
 function Relation:Size()
   assert(self:isPlain() or self:isCoupled())
   return self._size
+end
+
+function Relation:NumDims()
+  return
+    self:isPlain()   and 1 or
+    self:isGrid()    and 3 or
+    self:isCoupled() and 1 or
+    assert(false)
 end
 
 function Relation:Fields()
@@ -483,19 +491,6 @@ local function is_int(obj)
   return type(obj) == 'number' and obj % 1 == 0
 end
 
-local function is_subrectangle(rel, obj)
-  local dims = rel:Dims()
-  if not terralib.israwlist(obj) or #obj ~= #dims then return false end
-  for i,r in ipairs(obj) do
-    if not terralib.israwlist(r) or #r ~= 2 then return false end
-    if not is_int(r[1]) or not is_int(r[2]) then return false end
-    if r[1] < 0 or r[2] < 0 or r[1] >= dims[i] or r[2] >= dims[i] then
-      return false
-    end
-  end
-  return true
-end
-
 -------------------------------------------------------------------------------
 --[[  Fields                                                               ]]--
 -------------------------------------------------------------------------------
@@ -563,9 +558,7 @@ function Relation:NewField(name, typ)
 end
 
 function Field:Fill(val)
-  if not T.luaValConformsToType(val, self._type) then
-    error('Value to be loaded does not match field type', 2)
-  end
+  if M.isExprConst(val) then val = M.AST.Const(val) end
   M.stmts():insert(M.AST.FillField(self, val))
 end
 

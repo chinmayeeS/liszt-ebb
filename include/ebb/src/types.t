@@ -210,7 +210,7 @@ local function keyType(relation)
   -- create the type and the corresponding struct
   local ktyp        = NewType("key")
   ktyp.relation     = relation
-  ktyp.ndims        = #relation:Dims()
+  ktyp.ndims        = relation:NumDims()
   keytype_cache[relation] = ktyp
   return ktyp
 end
