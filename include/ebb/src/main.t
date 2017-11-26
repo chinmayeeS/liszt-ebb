@@ -119,6 +119,48 @@ function M.stmts()
 end
 
 -------------------------------------------------------------------------------
+-- Pretty-printing AST nodes
+-------------------------------------------------------------------------------
+
+function AST.Expr:__tostring()
+  error('Abstract Method')
+end
+function AST.Const:__tostring()
+  local str
+  if type(self.val) == 'table' then
+    local elemStrs =
+      terralib.newlist(self.val):map(function(x) return tostring(x) end)
+    str = '['..elemStrs:join(',')..']'
+  else
+    str = tostring(self.val)
+  end
+  return 'Const('..str..')'
+end
+function AST.GetGlobal:__tostring()
+  return 'GetGlobal('..self.global:Name()..')'
+end
+function AST.BinaryOp:__tostring()
+  return
+    'BinaryOp('..self.op..','..tostring(self.lhs)..','..tostring(self.rhs)..')'
+end
+function AST.UnaryOp:__tostring()
+  return 'UnaryOp('..self.op..','..tostring(self.arg)..')'
+end
+function AST.Array:__tostring()
+  local elemStrs = self.elems:map(function(x) return tostring(x) end)
+  return 'Array('..elemStrs:join(',')..')'
+end
+function AST.Index:__tostring()
+  return 'Index('..tostring(self.base)..','..tostring(self.index)..')'
+end
+function AST.ReadConfig:__tostring()
+  return 'ReadConfig('..self.name..')'
+end
+function AST.Cond2Expr:__tostring()
+  return 'Cond2Expr(...)'
+end
+
+-------------------------------------------------------------------------------
 -- Operations on AST nodes
 -------------------------------------------------------------------------------
 

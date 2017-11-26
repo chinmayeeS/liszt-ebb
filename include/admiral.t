@@ -687,18 +687,21 @@ end
 
 -- () -> RG.task
 R.Relation.emitElemColor = terralib.memoize(function(self)
+  local NX_ = RG.newsymbol(int, 'NX_')
+  local NY_ = RG.newsymbol(int, 'NY_')
+  local NZ_ = RG.newsymbol(int, 'NZ_')
   local elemColor
   if self:isGrid() then
     __demand(__inline) task elemColor(idx : int3d,
                                       xNum : int, yNum : int, zNum : int,
                                       xBnum : int, yBnum : int, zBnum : int,
-                                      [NX], [NY], [NZ])
+                                      [NX_], [NY_], [NZ_])
       idx.x = min( max( idx.x, xBnum ), xNum + xBnum - 1 )
       idx.y = min( max( idx.y, yBnum ), yNum + yBnum - 1 )
       idx.z = min( max( idx.z, zBnum ), zNum + zBnum - 1 )
-      return int3d{ (idx.x - xBnum) / (xNum / NX),
-                    (idx.y - yBnum) / (yNum / NY),
-                    (idx.z - zBnum) / (zNum / NZ) }
+      return int3d{ (idx.x - xBnum) / (xNum / NX_),
+                    (idx.y - yBnum) / (yNum / NY_),
+                    (idx.z - zBnum) / (zNum / NZ_) }
     end
   else
     -- TODO: Not covered: plain and coupled relations. These follow a
@@ -768,6 +771,9 @@ end
 R.Relation.emitPushAll = terralib.memoize(function(self)
   assert(self:isCoupled())
   local couplingFld = self:CouplingField()
+  local NX_ = RG.newsymbol(int, 'NX_')
+  local NY_ = RG.newsymbol(int, 'NY_')
+  local NZ_ = RG.newsymbol(int, 'NZ_')
   -- utilized sub-tasks
   local rngElemColor = couplingFld:Type().relation:emitElemColor()
   -- code elements to fill in
@@ -820,7 +826,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
       do
         var colorOff = int3d{ [stencil[1]], [stencil[2]], [stencil[3]] }
         if rPtr.__valid and
-           elemColor == (partColor + colorOff + {NX,NY,NZ}) % {NX,NY,NZ} then
+           elemColor == (partColor + colorOff + {NX_,NY_,NZ_}) % {NX_,NY_,NZ_} then
           var idx = 0
           for qPtr in [q] do
             if not [bool]([q][qPtr][ [self:validFieldOffset()] ]) then
@@ -841,7 +847,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
   local task pushAll([partColor], [r], [qs],
                      rngXNum : int, rngYNum : int, rngZNum : int,
                      rngXbnum : int, rngYbnum : int, rngZbnum : int,
-                     [NX], [NY], [NZ])
+                     [NX_], [NY_], [NZ_])
   where reads(r), writes(r.__valid), [privileges] do
     [queueInits]
     for [rPtr] in r do
@@ -850,7 +856,7 @@ R.Relation.emitPushAll = terralib.memoize(function(self)
           rngElemColor(rPtr.[couplingFld:Name()],
                        rngXNum, rngYNum, rngZNum,
                        rngXbnum, rngYbnum, rngZbnum,
-                       NX, NY, NZ)
+                       NX_, NY_, NZ_)
         if elemColor ~= partColor then
           [moveChecks]
           RG.assert(not rPtr.__valid, 'Element moved past predicted stencil')
@@ -1153,6 +1159,9 @@ function AST.Call:hasNoStencil()
      self.func == L.fmin or self.func == L.imin or
      self.func == L.dot or self.func == L.times then
     return all(self.params, function(e) return e:hasNoStencil() end)
+  end
+  if self.func == L.UNSAFE_ROW then
+    return self.params[1]:hasNoStencil()
   end
   return false
 end
@@ -2107,7 +2116,8 @@ if USE_HDF then
     if self:isCoupled() then
       assert(flds:find(self:CouplingField():Name()))
       flds:insert('__valid')
-      primPartQuote = self:emitPrimPartCheck()
+      -- XXX: Skipping primary-partition check due to Regent weirdness
+      primPartQuote = rquote end
     end
     local r = self:regionSymbol()
     local p_r = self:primPartSymbol()
@@ -2635,6 +2645,11 @@ function A.translate(xTiles, yTiles, zTiles)
     var [A.configSymbol()] = parseConfig(args.argv[1])
   end)
   -- Emit global declarations
+  header:insert(rquote
+    var [NX] = [xTiles:toRExpr()]
+    var [NY] = [yTiles:toRExpr()]
+    var [NZ] = [zTiles:toRExpr()]
+  end)
   for _,g in ipairs(globals) do
     header:insert(rquote
       var [g:varSymbol()] = [globalInits[g]:toRExpr()]
@@ -2646,9 +2661,6 @@ function A.translate(xTiles, yTiles, zTiles)
   end
   -- Emit primary partitioning scheme
   header:insert(rquote
-    var [NX] = [xTiles:toRExpr()]
-    var [NY] = [yTiles:toRExpr()]
-    var [NZ] = [zTiles:toRExpr()]
     var [A.primColors()] = ispace(int3d, {NX,NY,NZ})
   end)
   for _,rel in ipairs(rels) do
