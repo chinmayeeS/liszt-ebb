@@ -75,7 +75,7 @@ local function addHelpers(cells)
                      zOrigin + (zWidth/zNum) * (L.double(L.zid(c)-zBnum)+0.5) })
   end)
 
-  rawset(cells, 'locate', ebb(pos)
+  local ebb locate(pos)
     var xcw = xWidth / xNum
     var xro = xOrigin - xBnum * xcw
     var xpos = (pos[0] - xro) / xcw
@@ -107,7 +107,8 @@ local function addHelpers(cells)
       zidx = clamp_idx(zpos, zrnum)
     end
     return L.UNSAFE_ROW({xidx, yidx, zidx}, cells)
-  end)
+  end
+  rawset(cells, 'locate', locate)
 
   -- boundary depths
   cells:NewFieldMacro('xneg_depth', L.Macro(function(c)

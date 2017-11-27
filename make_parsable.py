@@ -35,14 +35,20 @@ for line in fileinput.input():
     line = re.sub(r'(&\w+)\(', r'[\1](', line)
     # inf -> math.huge
     line = re.sub(r'([^\w])inf', r'\1math.huge', line)
-    # Add proper namespaces to function calls
-    line = re.sub(r'([^\w])(printf|snprintf|malloc|free|memcpy)\(', r'\1C.\2(', line)
-    line = re.sub(r'([^\w])(acos|asin|atan|cbrt|tan|pow|fmod)\(', r'\1C.\2(', line)
+    # Add proper namespaces
+    line = re.sub(r'([^\w])(printf|snprintf|strcmp|malloc|free|memcpy|exit)\(', r'\1C.\2(', line)
+    line = re.sub(r'([^\w])(acos|asin|atan|cbrt|tan|pow|fmod|ceil)\(', r'\1C.\2(', line)
+    line = re.sub(r'([^\w])(fopen|fseek|ftell|fread|fclose|rand)\(', r'\1C.\2(', line)
+    line = line.replace('_IO_FILE', 'C._IO_FILE')
     line = line.replace('H5', 'HDF5.H5')
     line = line.replace('legion_', 'regentlib.c.legion_')
     line = line.replace('std.', 'regentlib.')
+    line = re.sub(r'(_?json_)', r'JSON.\1', line)
     # Remove unparsable terra annotations
     line = re.sub(r'extern global (.*) : \w+', r'\1', line)
+    # Fix some terra mis-prints
+    line = line.replace('if not', 'if not ')
+    line = re.sub(r'\(_0,[ _0-9,]* = ([^)]*)\)', r'({\1})', line)
     # (@x). -> x.
     line = re.sub(r'\(@(\w+)\)\.', r'\1.', line)
     # Print filtered line
