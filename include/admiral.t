@@ -2656,16 +2656,6 @@ function A.translate(xTiles, yTiles, zTiles)
       rels:insert(decl.rel)
     else assert(false) end
   end
-  -- Emit configuration parsing
-  local parseConfig = emitConfigParser()
-  header:insert(rquote
-    var args = RG.c.legion_runtime_get_input_args()
-    if args.argc < 2 or args.argv[1][0] == 45 then -- 45 == '-'
-      C.printf('Usage: %s <config.json> ...\n', args.argv[0])
-      C.exit(1)
-    end
-    var [A.configSymbol()] = parseConfig(args.argv[1])
-  end)
   -- Emit global declarations
   header:insert(rquote
     var [NX] = [xTiles:toRExpr()]
@@ -2714,7 +2704,7 @@ function A.translate(xTiles, yTiles, zTiles)
       body:insert(s:toRQuote())
     end
   end
-  -- Synthesize main task
+  -- Synthesize work task
   local opts = newlist() -- RG.rexpr*
   opts:insertall(rels:map(function(rel) return rel:primPartSymbol() end))
   opts:insert(A.primColors())
@@ -2738,9 +2728,23 @@ function A.translate(xTiles, yTiles, zTiles)
       end
     end
   end
-  local task main()
+  A.configSymbol():settype(A.configStruct())
+  local task work([A.configSymbol()])
     [header]
     __parallelize_with [opts] do [body] end
+  end
+  A.registerTask(work, 'work')
+  -- Synthesize main task
+  local parseConfig = emitConfigParser()
+  local task main()
+    var args = RG.c.legion_runtime_get_input_args()
+    if args.argc < 2 then
+      C.printf('Usage: %s <config1.json> <config2.json> ...\n', args.argv[0])
+      C.exit(1)
+    end
+    for i = 1,args.argc do
+      work(parseConfig(args.argv[1]))
+    end
   end
   A.registerTask(main, 'main')
   -- Emit to executable
