@@ -2738,12 +2738,10 @@ function A.translate(xTiles, yTiles, zTiles)
   local parseConfig = emitConfigParser()
   local task main()
     var args = RG.c.legion_runtime_get_input_args()
-    if args.argc < 2 then
-      C.printf('Usage: %s <config1.json> <config2.json> ...\n', args.argv[0])
-      C.exit(1)
-    end
     for i = 1,args.argc do
-      work(parseConfig(args.argv[1]))
+      if C.strcmp(args.argv[i], '-i') == 0 and i < args.argc - 1 then
+        work(parseConfig(args.argv[i+1]))
+      end
     end
   end
   A.registerTask(main, 'main')
