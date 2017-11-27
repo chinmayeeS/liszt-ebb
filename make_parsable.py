@@ -4,11 +4,15 @@
 # (not stderr) output into this script.
 
 import fileinput
+import os
 import re
+
+HDF_LIBNAME = os.environ['HDF_LIBNAME'] if 'HDF_LIBNAME' in os.environ else 'hdf5'
+HDF_HEADER = os.environ['HDF_HEADER'] if 'HDF_HEADER' in os.environ else 'hdf5.h'
 
 # Add required imports
 print 'import "regent"'
-print 'local HDF5 = terralib.includec("hdf5/serial/hdf5.h")'
+print 'local HDF5 = terralib.includec("%s")' % HDF_HEADER
 print 'local JSON = terralib.includec("json.h")'
 print 'local C = terralib.includecstring[['
 print '#include <math.h>'
@@ -55,4 +59,4 @@ for line in fileinput.input():
     print line
 
 # Add final compile command
-print 'regentlib.saveobj(main, "a.out", "executable", nil, {"-ljsonparser","-lm","-lhdf5_serial"})'
+print 'regentlib.saveobj(main, "a.out", "executable", nil, {"-ljsonparser","-lm","-l%s"})' % HDF_LIBNAME
