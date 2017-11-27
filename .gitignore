@@ -1,6 +1,7 @@
 terra
 legion
 *.o
+*.a
 *.so
 *.bc
 *.dylib
