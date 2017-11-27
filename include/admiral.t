@@ -993,7 +993,6 @@ function FunContext.New(info, argNames, argTypes)
     globalMap       = {},        -- map(PRE.Global, RG.symbol)
     relMap          = {},        -- map(R.Relation, RG.symbol)
     -- Signature information
-    domainSym       = nil,       -- RG.Symbol?
     domainRel       = nil,       -- R.Relation?
     args            = newlist(), -- RG.Symbol*
     accessedRels    = newlist(), -- R.Relation*
@@ -1008,7 +1007,6 @@ function FunContext.New(info, argNames, argTypes)
   -- Process mapped relation
   if info.domainRel then
     local rel = info.domainRel
-    self.domainSym = RG.newsymbol(rel:regionType(), 'dom')
     self.domainRel = rel
     -- Mapped relation always set as first accessed relation.
     self.accessedRels:insert(rel)
@@ -1120,9 +1118,6 @@ end
 -- () -> RG.symbol*
 function FunContext:signature()
   local fullArgs = newlist()
-  if self.domainRel then
-    fullArgs:insert(self.domainSym)
-  end
   for i = 1, #self.args do
     if i > 1 or not self.domainRel then
       fullArgs:insert(self.args[i])
@@ -1303,16 +1298,16 @@ function AST.UserFunction:toTask(info)
   local block = self.body:toRQuote(ctxt)
   if info.domainRel then
     local loopVar = ctxt.args[1]
+    local rel = ctxt.relMap[info.domainRel]
     if info.domainRel:isCoupled() then
-      local rel = ctxt.relMap[info.domainRel]
       block = rquote if [rel][loopVar].__valid then [block] end end
     end
     if RG.config['openmp'] then
       block = rquote
-        __demand(__openmp) for [loopVar] in [ctxt.domainSym] do [block] end
+        __demand(__openmp) for [loopVar] in [rel] do [block] end
       end
     else
-      block = rquote for [loopVar] in [ctxt.domainSym] do [block] end end
+      block = rquote for [loopVar] in [rel] do [block] end end
     end
   end
   body:insert(block)
@@ -1325,28 +1320,22 @@ function AST.UserFunction:toTask(info)
   -- Synthesize task
   local tsk
   if info.domainRel then
-    local dom = ctxt.domainSym
-    local univ = ctxt.relMap[ctxt.domainRel]
     if mustParallelizeManually(info) then
       -- TODO: Only handling the simple case of functions without stencils,
       -- which don't require any changes.
       assert(self.body:hasNoStencil())
-      task tsk([ctxt:signature()]) where
-        dom <= univ, [ctxt.privileges]
-      do [body] end
+      task tsk([ctxt:signature()])
+      where [ctxt.privileges] do [body] end
     elseif not ctxt.reducedGlobal and RG.check_cuda_available() then
-      __demand(__parallel, __cuda) task tsk([ctxt:signature()]) where
-        dom <= univ, [ctxt.privileges]
-      do [body] end
+      __demand(__parallel, __cuda) task tsk([ctxt:signature()])
+      where [ctxt.privileges] do [body] end
     else
-      __demand(__parallel) task tsk([ctxt:signature()]) where
-        dom <= univ, [ctxt.privileges]
-      do [body] end
+      __demand(__parallel) task tsk([ctxt:signature()])
+      where [ctxt.privileges] do [body] end
     end
   else
-    __demand(__inline) task tsk([ctxt:signature()]) where
-      [ctxt.privileges]
-    do [body] end
+    __demand(__inline) task tsk([ctxt:signature()])
+    where [ctxt.privileges] do [body] end
   end
   -- Finalize task
   A.registerTask(tsk, info.name)
@@ -2368,6 +2357,7 @@ function M.AST.Block:toRQuote()
   end
 end
 function M.AST.ForEach:toRQuote()
+  assert(not self.subset)
   -- Translate kernel to task
   local info = self.fun:_get_typechecked(42, self.rel, {})
   local tsk, fCtxt = self.fun:toKernelTask()
@@ -2375,14 +2365,10 @@ function M.AST.ForEach:toRQuote()
   local actualArgs = newlist()
   local c = RG.newsymbol(nil, 'c')
   if mustParallelizeManually(info) then
-    assert(not self.subset)
-    actualArgs:insert(rexpr [self.rel:primPartSymbol()][c] end)
     for _,rel in ipairs(fCtxt.accessedRels) do
       actualArgs:insert(rexpr [rel:primPartSymbol()][c] end)
     end
   else
-    actualArgs:insert(self.subset and self.subset:subRegionSymbol()
-                      or self.rel:regionSymbol())
     for _,rel in ipairs(fCtxt.accessedRels) do
       actualArgs:insert(rel:regionSymbol())
     end
@@ -2648,11 +2634,6 @@ end
 -- () -> RG.symbol()
 PRE.Global.varSymbol = terralib.memoize(function(self)
   return RG.newsymbol(toRType(self:Type()), idSanitize(self:Name()))
-end)
-
--- () -> RG.symbol()
-R.Subset.subRegionSymbol = terralib.memoize(function(self)
-  return RG.newsymbol(nil, idSanitize(self:FullName()))
 end)
 
 -- M.AST.Expr, M.AST.Expr, M.AST.Expr -> ()
