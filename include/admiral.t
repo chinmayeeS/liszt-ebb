@@ -168,16 +168,6 @@ end
 
 -- RG.task -> ()
 local function prettyPrintTask(tsk)
-  for option,value in pairs(tsk:get_primary_variant():get_ast().annotations) do
-    -- HACK: It seems like the load of 'regent/ast' creates a new instance
-    -- of the module, so metatable comparisons don't work.
-    local anotType = tostring(value):split('(')[1]
-    if anotType == 'ast.annotation.Demand' then
-      print('__demand('..option..')')
-    elseif anotType == 'ast.annotation.Forbid' then
-      print('__forbid('..option..')')
-    end
-  end
   tsk:printpretty()
 end
 
