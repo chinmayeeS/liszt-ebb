@@ -148,26 +148,30 @@ end
 function R.Relation:LinkWithCoarse(coarse, fldName)
   assert(self:isGrid() and coarse:isGrid())
   local fine = self
+  local fxNum, fyNum, fzNum  = fine:xNum(), fine:yNum(), fine:zNum()
+  local fxBnum, fyBnum, fzBnum  = fine:xBnum(), fine:yBnum(), fine:zBnum()
+  local cxNum, cyNum, czNum  = coarse:xNum(), coarse:yNum(), coarse:zNum()
+  local cxBnum, cyBnum, czBnum  = coarse:xBnum(), coarse:yBnum(), coarse:zBnum()
 
-  M.IF(M.OR(M.NOT(M.EQ(fine.xNum:get() % coarse.xNum:get(), 0)),
-       M.OR(M.NOT(M.EQ(fine.yNum:get() % coarse.yNum:get(), 0)),
-            M.NOT(M.EQ(fine.zNum:get() % coarse.zNum:get(), 0)))))
+  M.IF(M.OR(M.NOT(M.EQ(fxNum:get() % cxNum:get(), 0)),
+       M.OR(M.NOT(M.EQ(fyNum:get() % cyNum:get(), 0)),
+            M.NOT(M.EQ(fzNum:get() % czNum:get(), 0)))))
     M.ERROR("Inexact coarsening factor")
   M.END()
 
   fine:CoarseningFields():insert(fine:NewField(fldName, coarse))
   local ebb SetCoarseningField(f : fine)
-    var xFactor = fine.xNum / coarse.xNum
-    var yFactor = fine.yNum / coarse.yNum
-    var zFactor = fine.zNum / coarse.zNum
+    var xFactor = fxNum / cxNum
+    var yFactor = fyNum / cyNum
+    var zFactor = czNum / czNum
     if f.in_interior then
       f.[fldName] =
-        L.UNSAFE_ROW({(L.xid(f) - fine.xBnum) / xFactor + coarse.xBnum,
-                      (L.yid(f) - fine.yBnum) / yFactor + coarse.yBnum,
-                      (L.zid(f) - fine.zBnum) / zFactor + coarse.zBnum},
+        L.UNSAFE_ROW({(L.xid(f) - fxBnum) / xFactor + cxBnum,
+                      (L.yid(f) - fyBnum) / yFactor + cyBnum,
+                      (L.zid(f) - fzBnum) / zFactor + czBnum},
                      coarse)
     else
-      f.[fldName] = L.UNSAFE_ROW({-1,-1,-1}, coarse)
+      f.[fldName] = L.UNSAFE_ROW({0UL,0UL,0UL}, coarse)
     end
   end
   fine:foreach(SetCoarseningField)
