@@ -229,6 +229,13 @@ function A.registerFun(fun, name)
   end
 end
 
+-- terralib.struct -> ()
+function A.registerStruct(s)
+  if DEBUG then
+    prettyPrintStruct(s)
+  end
+end
+
 -------------------------------------------------------------------------------
 -- Vector type support
 -------------------------------------------------------------------------------
@@ -508,7 +515,7 @@ R.Relation.fieldSpace = terralib.memoize(function(self)
   if self:isCoupled() then
     fs.entries:insert({field='__valid', type=bool})
   end
-  if DEBUG then prettyPrintStruct(fs) end
+  A.registerStruct(fs)
   return fs
 end)
 
@@ -2180,7 +2187,7 @@ A.configStruct = terralib.memoize(function()
         struct_.entries:insert({field=fld, type=nested})
       end
     end
-    if DEBUG then prettyPrintStruct(struct_) end
+    A.registerStruct(struct_)
   end
   local s = terralib.types.newstruct('Config')
   fillStruct(s, CONFIG_MAP)
